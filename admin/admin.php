@@ -1,94 +1,133 @@
 <?php
+// Start session if not already started
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
 require_once '../includes/db_connection.php';
+
+// Enforce admin authentication
+if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'admin') {
+    header('Location: ../login.php');
+    exit();
+}
+
 checkAuth('admin');
 
-$admin_id = $_SESSION['user_id'];
+$admin_id = $_SESSION['user_id'] ?? 0;
 
-// Get system stats
-$total_students = getStat($pdo, "SELECT COUNT(*) FROM users WHERE role = 'student' AND status = 'active'");
-$total_goals = getStat($pdo, "SELECT COUNT(*) FROM admin_goals WHERE status = 'active'");
-$total_assigned = getStat($pdo, "SELECT COUNT(*) FROM student_goals");
-$completed_goals = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE status = 'completed'");
-$in_progress_goals = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE status = 'in_progress'");
-$overdue_goals = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE status = 'overdue'");
-$total_points = getStat($pdo, "SELECT COALESCE(SUM(a.points), 0) FROM user_achievements ua JOIN achievements a ON ua.achievement_id = a.id");
+// Safe defaults
+$total_students = 0;
+$total_goals = 0;
+$total_assigned = 0;
+$total_points = 0;
+$recent_activity = [];
+$department_stats = [];
+$top_students = [];
+$sidebar_stats = ['students' => 0, 'goals' => 0, 'assigned' => 0, 'points' => 0];
 
-// Get recent activity
-try {
-    $activity_stmt = $pdo->prepare("
-        SELECT 
-            u.name as student_name,
-            sg.title as goal_title,
-            sg.status as goal_status,
-            sg.progress_percentage,
-            sg.updated_at
-        FROM student_goals sg
-        JOIN users u ON sg.student_id = u.id
-        WHERE u.role = 'student'
-        ORDER BY sg.updated_at DESC
-        LIMIT 10
-    ");
-    $activity_stmt->execute();
-    $recent_activity = $activity_stmt->fetchAll();
-} catch (Exception $e) {
-    $recent_activity = [];
+if (isset($pdo)) {
+    try {
+        $total_students = getStat($pdo, "SELECT COUNT(*) FROM users WHERE role = 'student' AND status = 'active'");
+        $total_goals = getStat($pdo, "SELECT COUNT(*) FROM admin_goals WHERE status = 'active'");
+        $total_assigned = getStat($pdo, "SELECT COUNT(*) FROM student_goals");
+        $total_points = getStat($pdo, "SELECT COALESCE(SUM(a.points), 0) FROM user_achievements ua JOIN achievements a ON ua.achievement_id = a.id");
+
+        // Progress-based goal status counts
+        $pending_count = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE progress_percentage = 0");
+        $in_progress_count = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE progress_percentage > 0 AND progress_percentage < 100");
+        $completed_count = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE progress_percentage >= 100");
+        $overdue_count = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE due_date IS NOT NULL AND due_date < CURDATE() AND progress_percentage < 100");
+
+    } catch (Exception $e) {}
+
+    try {
+        $activity_stmt = $pdo->prepare("
+            SELECT 
+                u.name as student_name,
+                sg.title as goal_title,
+                sg.status as goal_status,
+                sg.progress_percentage,
+                sg.updated_at
+            FROM student_goals sg
+            JOIN users u ON sg.student_id = u.id
+            WHERE u.role = 'student'
+            ORDER BY sg.updated_at DESC
+            LIMIT 10
+        ");
+        $activity_stmt->execute();
+        $recent_activity = $activity_stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+
+    try {
+        $dept_stmt = $pdo->prepare("
+            SELECT 
+                u.department,
+                COUNT(sg.id) as total_goals,
+                SUM(CASE WHEN sg.progress_percentage >= 100 THEN 1 ELSE 0 END) as completed_goals,
+                ROUND(AVG(sg.progress_percentage), 1) as avg_progress
+            FROM users u
+            LEFT JOIN student_goals sg ON u.id = sg.student_id
+            WHERE u.role = 'student' AND u.department IS NOT NULL
+            GROUP BY u.department
+            ORDER BY avg_progress DESC
+            LIMIT 5
+        ");
+        $dept_stmt->execute();
+        $department_stats = $dept_stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+
+    try {
+        $top_students_stmt = $pdo->prepare("
+            SELECT 
+                u.id,
+                u.name,
+                u.email,
+                u.department,
+                COUNT(sg.id) as total_goals,
+                SUM(CASE WHEN sg.progress_percentage >= 100 THEN 1 ELSE 0 END) as completed_goals,
+                ROUND(AVG(sg.progress_percentage), 1) as avg_progress,
+                COALESCE(SUM(a.points), 0) as total_points
+            FROM users u
+            LEFT JOIN student_goals sg ON u.id = sg.student_id
+            LEFT JOIN user_achievements ua ON u.id = ua.user_id
+            LEFT JOIN achievements a ON ua.achievement_id = a.id
+            WHERE u.role = 'student' AND u.status = 'active'
+            GROUP BY u.id
+            ORDER BY avg_progress DESC, completed_goals DESC, total_points DESC
+            LIMIT 5
+        ");
+        $top_students_stmt->execute();
+        $top_students = $top_students_stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
 }
 
-
-// Get department statistics
-try {
-    $dept_stmt = $pdo->prepare("
-        SELECT 
-            u.department,
-            COUNT(sg.id) as total_goals,
-            SUM(CASE WHEN sg.status = 'completed' THEN 1 ELSE 0 END) as completed_goals,
-            ROUND(AVG(sg.progress_percentage), 1) as avg_progress
-        FROM users u
-        LEFT JOIN student_goals sg ON u.id = sg.student_id
-        WHERE u.role = 'student' AND u.department IS NOT NULL
-        GROUP BY u.department
-        ORDER BY avg_progress DESC
-        LIMIT 5
-    ");
-    $dept_stmt->execute();
-    $department_stats = $dept_stmt->fetchAll();
-} catch (Exception $e) {
-    $department_stats = [];
-}
-
-// Get top students
-try {
-    $top_students_stmt = $pdo->prepare("
-        SELECT 
-            u.id,
-            u.name,
-            u.email,
-            u.department,
-            COUNT(sg.id) as total_goals,
-            SUM(CASE WHEN sg.status = 'completed' THEN 1 ELSE 0 END) as completed_goals,
-            COALESCE(SUM(a.points), 0) as total_points
-        FROM users u
-        LEFT JOIN student_goals sg ON u.id = sg.student_id
-        LEFT JOIN user_achievements ua ON u.id = ua.user_id
-        LEFT JOIN achievements a ON ua.achievement_id = a.id
-        WHERE u.role = 'student' AND u.status = 'active'
-        GROUP BY u.id
-        ORDER BY completed_goals DESC, total_points DESC
-        LIMIT 5
-    ");
-    $top_students_stmt->execute();
-    $top_students = $top_students_stmt->fetchAll();
-} catch (Exception $e) {
-    $top_students = [];
-}
-
-// Get admin stats for sidebar
 $sidebar_stats = [
-    'students' => $total_students,
-    'goals' => $total_goals,
-    'assigned' => $total_assigned,
-    'points' => $total_points
+    'students' => $total_students ?? 0,
+    'goals' => $total_goals ?? 0,
+    'assigned' => $total_assigned ?? 0,
+    'points' => $total_points ?? 0
 ];
+
+$profile_picture = $_SESSION['profile_picture'] ?? '';
+$name = $_SESSION['name'] ?? 'Admin User';
+$email = $_SESSION['email'] ?? 'admin@progressmate.com';
+
+function relativeTime($datetime) {
+    try {
+        $now = new DateTime();
+        $past = new DateTime($datetime);
+        $interval = $now->diff($past);
+        if ($interval->days == 0) {
+            if ($interval->h == 0) return $interval->i . ' min ago';
+            return $interval->h . ' hr ago';
+        } elseif ($interval->days == 1) return 'Yesterday';
+        elseif ($interval->days < 7) return $interval->days . ' days ago';
+        return $past->format('M d');
+    } catch (Exception $e) {
+        return 'Unknown';
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -96,893 +135,470 @@ $sidebar_stats = [
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Dashboard - ProgressMate</title>
-    <!-- <link rel="stylesheet" href="../assets/css/style.css"> -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-    <style>
- /* ===== DASHBOARD BASE STYLES ===== */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --primary: #4f46e5;
+            --primary-dark: #4338ca;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --info: #3b82f6;
+            --purple: #8b5cf6;
+            --gray-100: #f9fafb;
+            --gray-200: #f3f4f6;
+            --gray-300: #e5e7eb;
+            --gray-500: #6b7280;
+            --gray-700: #374151;
+            --gray-900: #111827;
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.1);
+            --shadow: 0 4px 12px rgba(0,0,0,0.08);
+            --radius: 12px;
+            --transition: all 0.3s ease;
         }
 
-        body {
-            font-family: 'Inter', sans-serif;
-            background: #f9fafb;
-            color: #333;
-            line-height: 1.5;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: var(--gray-100); color: var(--gray-900); line-height: 1.6; }
+        a { text-decoration: none; }
 
-        .dashboard-wrapper {
-            display: flex;
-            min-height: 100vh;
-        }
-
-        /* ===== SIDEBAR STYLES ===== */
+        /* Layout */
+        .dashboard-wrapper { display: flex; min-height: 100vh; position: relative; }
+        
+        /* Sidebar */
         .sidebar {
             width: 280px;
             background: white;
-            border-right: 1px solid #e5e7eb;
-            display: flex;
-            flex-direction: column;
+            border-right: 1px solid var(--gray-300);
             position: fixed;
             height: 100vh;
             left: 0;
             top: 0;
             z-index: 1000;
-            transition: transform 0.3s ease;
-        }
-
-        @media (max-width: 768px) {
-            .sidebar {
-                transform: translateX(-100%);
-            }
-            .sidebar.active {
-                transform: translateX(0);
-            }
+            display: flex;
+            flex-direction: column;
+            transition: var(--transition);
+            box-shadow: var(--shadow);
         }
 
         .sidebar-header {
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
+            padding: 24px 20px;
+            border-bottom: 1px solid var(--gray-300);
             display: flex;
             align-items: center;
-            gap: 10px;
+            justify-content: space-between;
         }
 
         .logo {
-            color: #4f46e5;
-            font-weight: 700;
             font-size: 20px;
+            font-weight: 700;
+            color: var(--primary);
             display: flex;
             align-items: center;
             gap: 10px;
         }
 
-        .sidebar-close {
-            display: none;
-            background: none;
-            border: none;
-            color: #6b7280;
-            cursor: pointer;
-            font-size: 20px;
-            margin-left: auto;
-        }
-
-        @media (max-width: 768px) {
-            .sidebar-close {
-                display: block;
-            }
-        }
+        .sidebar-close { display: none; background: none; border: none; font-size: 20px; color: var(--gray-500); cursor: pointer; }
 
         .user-profile {
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
+            padding: 24px 20px;
+            border-bottom: 1px solid var(--gray-300);
             display: flex;
             align-items: center;
             gap: 15px;
         }
 
         .profile-pic {
-            width: 50px;
-            height: 50px;
+            width: 56px;
+            height: 56px;
             border-radius: 50%;
             object-fit: cover;
-            border: 3px solid #e5e7eb;
+            border: 3px solid var(--gray-300);
         }
 
         .profile-pic.default {
-            background: linear-gradient(135deg, #4f46e5, #8b5cf6);
+            background: linear-gradient(135deg, var(--primary), var(--purple));
             color: white;
+            font-size: 24px;
+            font-weight: bold;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 20px;
-            font-weight: bold;
         }
 
-        .user-info h4 {
-            margin: 0 0 5px 0;
-            font-size: 16px;
-            font-weight: 600;
-        }
-
-        .user-info p {
-            margin: 0;
-            color: #6b7280;
-            font-size: 14px;
-        }
-
-        .nav-menu {
-            flex: 1;
-            padding: 20px 0;
-            overflow-y: auto;
-        }
-
+        .nav-menu { flex: 1; padding: 16px 0; overflow-y: auto; }
         .nav-link {
             display: flex;
             align-items: center;
             gap: 12px;
-            padding: 12px 20px;
-            color: #374151;
-            text-decoration: none;
-            transition: all 0.2s;
-            position: relative;
+            padding: 14px 20px;
+            color: var(--gray-700);
+            transition: var(--transition);
         }
 
-        .nav-link:hover {
-            background: #f3f4f6;
-            color: #4f46e5;
-        }
-
-        .nav-link.active {
-            background: #eef2ff;
-            color: #4f46e5;
-            border-left: 3px solid #4f46e5;
-        }
-
-        .nav-link i {
-            width: 20px;
-            text-align: center;
-        }
+        .nav-link:hover { background: var(--gray-200); color: var(--primary); }
+        .nav-link.active { background: #eef2ff; color: var(--primary); border-left: 4px solid var(--primary); font-weight: 600; }
 
         .badge {
-            background: #4f46e5;
+            margin-left: auto;
+            background: var(--primary);
             color: white;
-            padding: 2px 8px;
-            border-radius: 12px;
+            padding: 4px 10px;
+            border-radius: 20px;
             font-size: 12px;
             font-weight: 600;
-            margin-left: auto;
         }
 
-        .sidebar-footer {
-            padding: 20px;
-            border-top: 1px solid #e5e7eb;
+        .sidebar-quick-stats { padding: 20px; border-top: 1px solid var(--gray-300); }
+        .sidebar-stat { display: flex; align-items: center; gap: 15px; margin-bottom: 16px; }
+        .sidebar-stat:last-child { margin-bottom: 0; }
+        .sidebar-stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            background: #eef2ff;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
         }
 
+        .sidebar-stat-label { font-size: 13px; color: var(--gray-500); }
+        .sidebar-stat-number { font-size: 18px; font-weight: 700; }
+
+        .sidebar-footer { padding: 20px; }
         .logout-btn {
             display: flex;
             align-items: center;
             gap: 12px;
-            padding: 12px 20px;
+            padding: 14px 20px;
             background: #fee2e2;
             color: #dc2626;
-            border: none;
-            border-radius: 8px;
-            width: 100%;
-            text-align: left;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        .logout-btn:hover {
-            background: #fecaca;
-        }
-
-        .sidebar-quick-stats {
-            padding: 20px;
-            border-top: 1px solid #e5e7eb;
-        }
-
-        .sidebar-stat {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 15px;
-        }
-
-        .sidebar-stat:last-child {
-            margin-bottom: 0;
-        }
-
-        .sidebar-stat-icon {
-            width: 40px;
-            height: 40px;
             border-radius: 10px;
-            background: #eef2ff;
-            color: #4f46e5;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            width: 100%;
+            font-weight: 500;
+            transition: var(--transition);
         }
 
-        .sidebar-stat-info {
-            flex: 1;
-        }
+        .logout-btn:hover { background: #fecaca; }
 
-        .sidebar-stat-label {
-            font-size: 12px;
-            color: #6b7280;
-        }
-
-        .sidebar-stat-number {
-            font-size: 16px;
-            font-weight: 600;
-            color: #111827;
-        }
-
-        /* ===== MAIN CONTENT STYLES ===== */
+        /* Main Content */
         .main-content {
             flex: 1;
             margin-left: 280px;
-            padding: 20px;
-            overflow-y: auto;
+            padding: 32px;
+            transition: var(--transition);
         }
 
-        @media (max-width: 768px) {
-            .main-content {
-                margin-left: 0;
-                padding: 15px;
-            }
-        }
-
-        .mobile-toggle {
-            display: none;
-            position: fixed;
-            top: 15px;
-            left: 15px;
-            z-index: 999;
-            background: #4f46e5;
-            color: white;
-            border: none;
-            width: 40px;
-            height: 40px;
-            border-radius: 8px;
-            cursor: pointer;
-            align-items: center;
-            justify-content: center;
-        }
-
-        @media (max-width: 768px) {
-            .mobile-toggle {
-                display: flex;
-            }
-        }
-
-        /* ===== ADMIN DASHBOARD STYLES ===== */
         .page-header {
             display: flex;
+            flex-direction: row;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
+            margin-bottom: 32px;
+            flex-wrap: wrap;
+            gap: 16px;
         }
 
-        .header-content h1 {
-            margin: 0 0 10px 0;
-            font-size: 28px;
-            color: #111827;
-        }
-
-        .header-content p {
-            margin: 0;
-            color: #6b7280;
-        }
+        .header-content h1 { font-size: 30px; font-weight: 700; }
+        .header-content p { color: var(--gray-500); margin-top: 8px; }
 
         .btn {
-            padding: 10px 20px;
-            border-radius: 8px;
+            padding: 12px 24px;
+            border-radius: 10px;
             font-weight: 500;
             cursor: pointer;
             border: none;
-            transition: all 0.2s;
-            font-size: 14px;
+            transition: var(--transition);
             display: inline-flex;
             align-items: center;
             gap: 8px;
-        }
-
-        .btn-primary {
-            background: #4f46e5;
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: #4338ca;
+            font-size: 15px;
         }
 
         .btn-outline {
             background: white;
-            color: #4f46e5;
-            border: 1px solid #4f46e5;
+            color: var(--primary);
+            border: 1px solid var(--primary);
         }
 
-        .btn-outline:hover {
-            background: #4f46e5;
-            color: white;
-        }
+        .btn-outline:hover { background: var(--primary); color: white; }
 
-        .btn-sm {
-            padding: 6px 12px;
-            font-size: 13px;
-        }
-
-        /* Stats Grid */
+        /* Grids */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 24px;
+            margin-bottom: 40px;
+        }
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+            gap: 24px;
+            margin-bottom: 40px;
+        }
+
+        .quick-actions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
             gap: 20px;
-            margin-bottom: 30px;
+        }
+
+        /* Cards */
+        .card, .stat-card {
+            background: white;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            overflow: hidden;
         }
 
         .stat-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            border-left: 4px solid #4f46e5;
+            padding: 24px;
+            border-left: 5px solid var(--primary);
         }
 
-        .stat-card.students { border-left-color: #3b82f6; }
-        .stat-card.goals { border-left-color: #10b981; }
-        .stat-card.assigned { border-left-color: #f59e0b; }
-        .stat-card.points { border-left-color: #8b5cf6; }
+        .stat-card.students { border-left-color: var(--info); }
+        .stat-card.goals { border-left-color: var(--success); }
+        .stat-card.assigned { border-left-color: var(--warning); }
+        .stat-card.points { border-left-color: var(--purple); }
 
-        .stat-content {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
+        .stat-content { display: flex; align-items: center; gap: 20px; }
         .stat-icon {
-            width: 50px;
-            height: 50px;
-            border-radius: 10px;
+            width: 60px;
+            height: 60px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 24px;
-        }
-
-        .stat-card.students .stat-icon { background: #dbeafe; color: #3b82f6; }
-        .stat-card.goals .stat-icon { background: #d1fae5; color: #10b981; }
-        .stat-card.assigned .stat-icon { background: #fef3c7; color: #f59e0b; }
-        .stat-card.points .stat-icon { background: #e0e7ff; color: #8b5cf6; }
-
-        .stat-number {
             font-size: 28px;
-            font-weight: 700;
-            margin: 5px 0;
-            color: #111827;
         }
 
-        .stat-label {
-            font-size: 14px;
-            color: #6b7280;
-        }
+        .stat-card.students .stat-icon { background: #dbeafe; color: var(--info); }
+        .stat-card.goals .stat-icon { background: #d1fae5; color: var(--success); }
+        .stat-card.assigned .stat-icon { background: #fef3c7; color: var(--warning); }
+        .stat-card.points .stat-icon { background: #e0e7ff; color: var(--purple); }
 
-        /* Content Grid */
-        .content-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        @media (max-width: 768px) {
-            .content-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .card {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
+        .stat-number { font-size: 32px; font-weight: 800; }
+        .stat-label { font-size: 15px; color: var(--gray-500); }
 
         .card-header {
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
+            padding: 24px;
+            border-bottom: 1px solid var(--gray-300);
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
         .card-header h3 {
-            margin: 0;
-            font-size: 18px;
+            font-size: 19px;
             font-weight: 600;
             display: flex;
             align-items: center;
             gap: 10px;
         }
 
-        .card-body {
-            padding: 20px;
-        }
+        .card-body { padding: 24px; }
 
-        /* Activity List */
-        .activity-list {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        .activity-item {
+        /* Activity & Lists */
+        .activity-item, .dept-item, .student-item, .status-item {
             display: flex;
             align-items: center;
-            gap: 15px;
-            padding: 10px;
-            border-radius: 8px;
-            background: #f9fafb;
-        }
-
-        .activity-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 8px;
-            background: #e0e7ff;
-            color: #4f46e5;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .activity-content {
-            flex: 1;
-        }
-
-        .activity-title {
-            font-weight: 500;
-            color: #111827;
-            margin-bottom: 2px;
-        }
-
-        .activity-details {
-            font-size: 12px;
-            color: #6b7280;
-        }
-
-        .activity-time {
-            font-size: 12px;
-            color: #9ca3af;
-        }
-
-        /* Department Stats */
-        .dept-stats {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .dept-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px;
-            border-radius: 8px;
-            background: #f9fafb;
-        }
-
-        .dept-name {
-            font-weight: 500;
-            color: #374151;
-        }
-
-        .dept-progress {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        .progress-bar {
-            width: 100px;
-            height: 8px;
-            background: #e5e7eb;
-            border-radius: 4px;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: #4f46e5;
-            border-radius: 4px;
-        }
-
-        .progress-text {
-            font-size: 12px;
-            color: #6b7280;
-            min-width: 40px;
-            text-align: right;
-        }
-
-        /* Top Students */
-        .top-students-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .student-item {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            padding: 10px;
-            border-radius: 8px;
-            background: #f9fafb;
-        }
-
-        .student-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #4f46e5, #8b5cf6);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            font-size: 16px;
-        }
-
-        .student-info {
-            flex: 1;
-        }
-
-        .student-name {
-            font-weight: 500;
-            color: #111827;
-            margin-bottom: 2px;
-        }
-
-        .student-details {
-            font-size: 12px;
-            color: #6b7280;
-        }
-
-        .student-score {
-            font-weight: 600;
-            color: #10b981;
-        }
-
-        /* Quick Actions */
-        .quick-actions-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin-top: 20px;
-        }
-
-        .quick-action {
-            padding: 20px;
-            background: #f9fafb;
+            gap: 16px;
+            padding: 16px;
+            background: var(--gray-100);
             border-radius: 10px;
-            text-align: center;
-            text-decoration: none;
-            color: #374151;
-            transition: all 0.2s;
-            display: block;
+            margin-bottom: 12px;
+            transition: var(--transition);
         }
 
-        .quick-action:hover {
-            background: #e5e7eb;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
+        .activity-item:hover, .dept-item:hover, .student-item:hover { background: var(--gray-200); }
 
-        .quick-action i {
-            font-size: 24px;
-            margin-bottom: 10px;
-            display: block;
-            color: #4f46e5;
-        }
-
-        .quick-action span {
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        /* Goal Status Distribution */
-        .status-distribution {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .status-item {
+        .activity-icon, .student-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
-            gap: 15px;
-            padding: 10px;
-            border-radius: 8px;
+            justify-content: center;
+            flex-shrink: 0;
         }
 
-        .status-count {
-            font-weight: 600;
-            color: #111827;
-            min-width: 30px;
+        .activity-icon { background: #e0e7ff; color: var(--primary); font-size: 20px; }
+        .student-avatar {
+            background: linear-gradient(135deg, var(--primary), var(--purple));
+            color: white;
+            font-weight: bold;
+            font-size: 18px;
         }
 
-        .status-label {
+        .activity-time, .progress-text, .status-percentage { font-size: 13px; color: var(--gray-500); white-space: nowrap; }
+
+        /* Progress Bars */
+        .progress-bar, .status-bar {
             flex: 1;
-            font-size: 14px;
-        }
-
-        .status-bar {
-            width: 100px;
-            height: 8px;
-            background: #e5e7eb;
-            border-radius: 4px;
+            height: 10px;
+            background: var(--gray-300);
+            border-radius: 6px;
             overflow: hidden;
         }
 
-        .status-fill {
+        .progress-fill, .status-fill {
             height: 100%;
-            border-radius: 4px;
+            background: var(--primary);
+            border-radius: 6px;
+            width: 0;
+            transition: width 1.6s ease-out;
         }
 
-        .status-completed .status-fill { background: #10b981; }
-        .status-in-progress .status-fill { background: #3b82f6; }
-        .status-pending .status-fill { background: #f59e0b; }
-        .status-overdue .status-fill { background: #ef4444; }
-
-        .status-percentage {
-            font-size: 12px;
-            color: #6b7280;
-            min-width: 40px;
-            text-align: right;
-        }
+        .status-pending .status-fill { background: var(--warning); }
+        .status-in-progress .status-fill { background: var(--info); }
+        .status-completed .status-fill { background: var(--success); }
+        .status-overdue .status-fill { background: var(--danger); }
 
         /* Empty State */
         .empty-state {
             text-align: center;
-            padding: 40px 20px;
-            color: #6b7280;
+            padding: 60px 20px;
+            color: var(--gray-500);
         }
 
-        .empty-state i {
-            font-size: 24px;
-            margin-bottom: 10px;
+        .empty-state i { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+
+        /* Quick Actions */
+        .quick-action {
+            padding: 24px;
+            background: white;
+            border-radius: var(--radius);
+            text-align: center;
+            color: var(--gray-700);
+            box-shadow: var(--shadow-sm);
+            transition: var(--transition);
         }
 
-        /* Reuse styles from previous pages */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+        .quick-action:hover {
+            transform: translateY(-6px);
+            box-shadow: var(--shadow);
         }
-        
-        .stat-card {
-            background: white;
+
+        .quick-action i { font-size: 32px; color: var(--primary); margin-bottom: 12px; }
+
+        /* Mobile Toggle & Responsiveness */
+        .mobile-toggle {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1100;
+            background: var(--primary);
+            color: white;
+            border: none;
+            width: 48px;
+            height: 48px;
             border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            text-align: center;
+            font-size: 20px;
+            cursor: pointer;
+            box-shadow: var(--shadow);
         }
-        
-        .stat-number {
-            font-size: 28px;
-            font-weight: 700;
-            color: #111827;
+
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
         }
-        
-        .stat-label {
-            font-size: 14px;
-            color: #6b7280;
+
+        /* Media Queries */
+        @media (max-width: 1024px) {
+            .content-grid { grid-template-columns: 1fr 1fr; }
+            .stats-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
         }
-        
-        .filters-section {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+                width: 300px;
+                box-shadow: var(--shadow);
+            }
+
+            .sidebar.active { transform: translateX(0); }
+            .sidebar-overlay.active { display: block; }
+
+            .sidebar-close { display: block; }
+            .mobile-toggle { display: flex; align-items: center; justify-content: center; }
+
+            .main-content { margin-left: 0; padding: 24px 16px; padding-top: 80px; }
+
+            .page-header { flex-direction: column; align-items: flex-start; }
+            .stats-grid, .content-grid { grid-template-columns: 1fr; }
+
+            .quick-actions-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+
+            .activity-item, .dept-item, .student-item, .status-item { padding: 16px; flex-direction: column; align-items: flex-start; gap: 12px; }
+            .activity-time { align-self: flex-end; }
         }
-        
-        .filter-row {
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-            align-items: flex-end;
+
+        @media (max-width: 480px) {
+            .header-content h1 { font-size: 26px; }
+            .stat-content { flex-direction: column; text-align: center; gap: 12px; }
+            .stat-icon { width: 50px; height: 50px; font-size: 24px; }
         }
-        
-        .filter-group {
-            flex: 1;
-            min-width: 200px;
-        }
-        
-        .report-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            margin-bottom: 30px;
-        }
-        
-        .report-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        .report-table th {
-            background: #f9fafb;
-            padding: 15px;
-            text-align: left;
-            border-bottom: 1px solid #e5e7eb;
-        }
-        
-        .report-table td {
-            padding: 15px;
-            border-bottom: 1px solid #f3f4f6;
-        }
-        
-        .student-select {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #d1d5db;
-            border-radius: 8px;
-        }
-        
-        .student-report {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-        
-        .student-info {
-            margin-bottom: 20px;
-        }
-        
-        .student-stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        
-        .student-stat {
-            background: #f9fafb;
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-        }
-        
-        .student-stat .stat-number {
-            font-size: 24px;
-            font-weight: 700;
-        }
-        
-        .student-stat .stat-label {
-            font-size: 12px;
-            color: #6b7280;
-        }
-</style>
     </style>
 </head>
 <body>
-    <!-- Mobile Menu Toggle -->
-    <button class="mobile-toggle" id="sidebarToggle">
-        <i class="fas fa-bars"></i>
-    </button>
-    
+    <button class="mobile-toggle" id="sidebarToggle"><i class="fas fa-bars"></i></button>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
     <div class="dashboard-wrapper">
-        <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <div class="logo">
-                    <i class="fas fa-star"></i>
-                    <span>ProgressMate</span>
-                </div>
-                <button class="sidebar-close" id="sidebarClose">
-                    <i class="fas fa-times"></i>
-                </button>
+                <div class="logo"><i class="fas fa-star"></i> ProgressMate</div>
+                <button class="sidebar-close" id="sidebarClose"><i class="fas fa-times"></i></button>
             </div>
 
             <div class="user-profile">
-                <?php if (!empty($_SESSION['profile_picture'])): ?>
-                    <img src="../<?php echo htmlspecialchars($_SESSION['profile_picture']); ?>" alt="Profile" class="profile-pic">
+                <?php if (!empty($profile_picture)): ?>
+                    <img src="../<?php echo htmlspecialchars($profile_picture); ?>" alt="Profile" class="profile-pic">
                 <?php else: ?>
-                    <div class="profile-pic default">
-                        <?php echo strtoupper(substr($_SESSION['name'], 0, 1)); ?>
-                    </div>
+                    <div class="profile-pic default"><?php echo strtoupper(substr($name, 0, 1)); ?></div>
                 <?php endif; ?>
                 <div class="user-info">
-                    <h4><?php echo htmlspecialchars($_SESSION['name']); ?></h4>
-                    <p><?php echo htmlspecialchars($_SESSION['email']); ?></p>
-                    <span style="font-size: 11px; background: #e0e7ff; color: #4f46e5; padding: 2px 8px; border-radius: 12px;">
-                        ADMIN
-                    </span>
+                    <h4><?php echo htmlspecialchars($name); ?></h4>
+                    <p><?php echo htmlspecialchars($email); ?></p>
+                    <span style="font-size: 12px; background: #e0e7ff; color: var(--primary); padding: 4px 10px; border-radius: 20px; font-weight: 600;">ADMIN</span>
                 </div>
             </div>
 
             <nav class="nav-menu">
-                <a href="admin.php" class="nav-link active">
-                    <i class="fas fa-tachometer-alt"></i>
-                    <span>Dashboard</span>
-                </a>
-                <a href="students.php" class="nav-link">
-                    <i class="fas fa-users"></i>
-                    <span>Students</span>
-                    <?php if ($sidebar_stats['students'] > 0): ?>
-                        <span class="badge"><?php echo $sidebar_stats['students']; ?></span>
-                    <?php endif; ?>
-                </a>
-                <a href="goals.php" class="nav-link">
-                    <i class="fas fa-bullseye"></i>
-                    <span>System Goals</span>
-                    <?php if ($sidebar_stats['goals'] > 0): ?>
-                        <span class="badge"><?php echo $sidebar_stats['goals']; ?></span>
-                    <?php endif; ?>
-                </a>
-                <a href="assign_goals.php" class="nav-link">
-                    <i class="fas fa-tasks"></i>
-                    <span>Assign Goals</span>
-                    <?php if ($sidebar_stats['assigned'] > 0): ?>
-                        <span class="badge"><?php echo $sidebar_stats['assigned']; ?></span>
-                    <?php endif; ?>
-                </a>
-                <a href="achievements.php" class="nav-link">
-                    <i class="fas fa-trophy"></i>
-                    <span>Achievements</span>
-                    <?php if ($sidebar_stats['points'] > 0): ?>
-                        <span class="badge"><?php echo $sidebar_stats['points']; ?> pts</span>
-                    <?php endif; ?>
-                </a>
-                <a href="reports.php" class="nav-link">
-                    <i class="fas fa-chart-bar"></i>
-                    <span>Reports</span>
-                </a>
-                <a href="notifications.php" class="nav-link">
-                    <i class="fas fa-bell"></i>
-                    <span>Notifications</span>
-                </a>
-                <a href="settings.php" class="nav-link">
-                    <i class="fas fa-cog"></i>
-                    <span>Settings</span>
-                </a>
+                <a href="admin.php" class="nav-link active"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
+                <a href="students.php" class="nav-link"><i class="fas fa-users"></i> Students <?php if ($sidebar_stats['students'] > 0): ?><span class="badge"><?php echo $sidebar_stats['students']; ?></span><?php endif; ?></a>
+                <a href="goals.php" class="nav-link"><i class="fas fa-bullseye"></i> System Goals <?php if ($sidebar_stats['goals'] > 0): ?><span class="badge"><?php echo $sidebar_stats['goals']; ?></span><?php endif; ?></a>
+                <a href="assign_goals.php" class="nav-link"><i class="fas fa-tasks"></i> Assign Goals <?php if ($sidebar_stats['assigned'] > 0): ?><span class="badge"><?php echo $sidebar_stats['assigned']; ?></span><?php endif; ?></a>
+                <a href="achievements.php" class="nav-link"><i class="fas fa-trophy"></i> Achievements <?php if ($sidebar_stats['points'] > 0): ?><span class="badge"><?php echo $sidebar_stats['points']; ?> pts</span><?php endif; ?></a>
+                <a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a>
+                <a href="notifications.php" class="nav-link"><i class="fas fa-bell"></i> Notifications</a>
+                <a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> Settings</a>
             </nav>
 
             <div class="sidebar-quick-stats">
                 <div class="sidebar-stat">
-                    <div class="sidebar-stat-icon">
-                        <i class="fas fa-users"></i>
-                    </div>
+                    <div class="sidebar-stat-icon"><i class="fas fa-users"></i></div>
                     <div class="sidebar-stat-info">
                         <div class="sidebar-stat-label">Students</div>
                         <div class="sidebar-stat-number"><?php echo $sidebar_stats['students']; ?></div>
                     </div>
                 </div>
                 <div class="sidebar-stat">
-                    <div class="sidebar-stat-icon">
-                        <i class="fas fa-bullseye"></i>
-                    </div>
+                    <div class="sidebar-stat-icon"><i class="fas fa-bullseye"></i></div>
                     <div class="sidebar-stat-info">
                         <div class="sidebar-stat-label">Goals</div>
                         <div class="sidebar-stat-number"><?php echo $sidebar_stats['goals']; ?></div>
                     </div>
                 </div>
                 <div class="sidebar-stat">
-                    <div class="sidebar-stat-icon">
-                        <i class="fas fa-star"></i>
-                    </div>
+                    <div class="sidebar-stat-icon"><i class="fas fa-star"></i></div>
                     <div class="sidebar-stat-info">
                         <div class="sidebar-stat-label">Points</div>
                         <div class="sidebar-stat-number"><?php echo $sidebar_stats['points']; ?></div>
@@ -991,215 +607,193 @@ $sidebar_stats = [
             </div>
 
             <div class="sidebar-footer">
-                <a href="../logout.php" class="logout-btn">
-                    <i class="fas fa-sign-out-alt"></i>
-                    <span>Logout</span>
-                </a>
+                <a href="../logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
             </div>
         </aside>
-        
-        <!-- Main Content -->
+
         <main class="main-content">
-            <!-- Header -->
             <header class="page-header">
                 <div class="header-content">
                     <h1>Admin Dashboard</h1>
                     <p>System overview and analytics</p>
                 </div>
                 <div class="header-actions">
-                    <a href="reports.php" class="btn btn-outline">
-                        <i class="fas fa-chart-bar"></i> View Reports
-                    </a>
+                    <a href="reports.php" class="btn btn-outline"><i class="fas fa-chart-bar"></i> View Reports</a>
                 </div>
             </header>
-            
-            <!-- Stats Overview -->
+
             <div class="stats-grid">
                 <div class="stat-card students">
                     <div class="stat-content">
-                        <div class="stat-icon">
-                            <i class="fas fa-users"></i>
-                        </div>
+                        <div class="stat-icon"><i class="fas fa-users"></i></div>
                         <div>
-                            <div class="stat-number"><?php echo $total_students; ?></div>
+                            <div class="stat-number"><?php echo $total_students ?? 0; ?></div>
                             <div class="stat-label">Active Students</div>
                         </div>
                     </div>
                 </div>
-                
                 <div class="stat-card goals">
                     <div class="stat-content">
-                        <div class="stat-icon">
-                            <i class="fas fa-bullseye"></i>
-                        </div>
+                        <div class="stat-icon"><i class="fas fa-bullseye"></i></div>
                         <div>
-                            <div class="stat-number"><?php echo $total_goals; ?></div>
+                            <div class="stat-number"><?php echo $total_goals ?? 0; ?></div>
                             <div class="stat-label">System Goals</div>
                         </div>
                     </div>
                 </div>
-                
                 <div class="stat-card assigned">
                     <div class="stat-content">
-                        <div class="stat-icon">
-                            <i class="fas fa-tasks"></i>
-                        </div>
+                        <div class="stat-icon"><i class="fas fa-tasks"></i></div>
                         <div>
-                            <div class="stat-number"><?php echo $total_assigned; ?></div>
+                            <div class="stat-number"><?php echo $total_assigned ?? 0; ?></div>
                             <div class="stat-label">Assigned Goals</div>
                         </div>
                     </div>
                 </div>
-                
                 <div class="stat-card points">
                     <div class="stat-content">
-                        <div class="stat-icon">
-                            <i class="fas fa-star"></i>
-                        </div>
+                        <div class="stat-icon"><i class="fas fa-star"></i></div>
                         <div>
-                            <div class="stat-number"><?php echo $total_points; ?></div>
-                            <div class="stat-label">Total Points</div>
+                            <div class="stat-number"><?php echo $total_points ?? 0; ?></div>
+                            <div class="stat-label">Total Points Earned</div>
                         </div>
                     </div>
                 </div>
             </div>
-            
-            <!-- Content Grid -->
+
             <div class="content-grid">
-                <!-- Recent Activity -->
+                <!-- Recent Activity (task-specific with student name and exact progress) -->
                 <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-history"></i> Recent Activity</h3>
-                    </div>
+                    <div class="card-header"><h3><i class="fas fa-history"></i> Recent Goal Updates</h3></div>
                     <div class="card-body">
-                        <div class="activity-list">
-                            <?php if (!empty($recent_activity)): ?>
-                                <?php foreach ($recent_activity as $activity): ?>
-                                    <div class="activity-item">
-                                        <div class="activity-icon">
-                                            <i class="fas fa-bullseye"></i>
+                        <?php if (!empty($recent_activity)): ?>
+                            <?php foreach ($recent_activity as $activity): 
+                                $status_color = match($activity['goal_status'] ?? 'pending') {
+                                    'completed' => 'var(--success)',
+                                    'overdue' => 'var(--danger)',
+                                    default => 'var(--warning)'
+                                };
+                            ?>
+                                <div class="activity-item">
+                                    <div class="activity-icon"><i class="fas fa-bullseye"></i></div>
+                                    <div style="flex: 1;">
+                                        <div style="font-weight: 600; margin-bottom: 4px;">
+                                            <?php echo htmlspecialchars($activity['student_name'] ?? 'Unknown'); ?> 
                                         </div>
-                                        <div class="activity-content">
-                                            <div class="activity-title">
-                                                <?php echo htmlspecialchars($activity['student_name']); ?>
-                                            </div>
-                                            <div class="activity-details">
-                                                <?php echo htmlspecialchars($activity['goal_title']); ?> • 
-                                                <?php echo ucfirst(str_replace('_', ' ', $activity['goal_status'])); ?>
-                                            </div>
+                                        <div style="font-size: 14px; color: var(--gray-700);">
+                                            Goal: "<?php echo htmlspecialchars($activity['goal_title'] ?? 'Untitled'); ?>"
+                                            <span style="color: <?php echo $status_color; ?>; font-weight: 600;">
+                                                • <?php echo ucfirst(str_replace('_', ' ', $activity['goal_status'] ?? 'pending')); ?>
+                                            </span>
                                         </div>
-                                        <div class="activity-time">
-                                            <?php echo date('h:i A', strtotime($activity['updated_at'])); ?>
+                                        <div style="margin-top: 6px;">
+                                            <div class="progress-bar">
+                                                <div class="progress-fill" style="width: <?php echo $activity['progress_percentage'] ?? 0; ?>%; background: <?php echo ($activity['progress_percentage'] ?? 0) >= 100 ? 'var(--success)' : 'var(--info)'; ?>;"></div>
+                                            </div>
+                                            <span style="font-size: 13px; color: var(--gray-700);"><?php echo number_format($activity['progress_percentage'] ?? 0, 1); ?>% complete</span>
                                         </div>
                                     </div>
-                                <?php endforeach; ?>
-                            <?php else: ?>
-                                <div class="empty-state">
-                                    <i class="fas fa-history"></i>
-                                    <p>No recent activity</p>
+                                    <div class="activity-time"><?php echo relativeTime($activity['updated_at'] ?? 'now'); ?></div>
                                 </div>
-                            <?php endif; ?>
-                        </div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="empty-state"><i class="fas fa-history"></i> <p>No recent activity yet</p></div>
+                        <?php endif; ?>
                     </div>
                 </div>
-                
-                <!-- Department Performance -->
+
+                <!-- Top Departments (with avg progress) -->
                 <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-chart-line"></i> Top Departments</h3>
-                    </div>
+                    <div class="card-header"><h3><i class="fas fa-chart-line"></i> Top Departments by Progress</h3></div>
                     <div class="card-body">
-                        <div class="dept-stats">
-                            <?php if (!empty($department_stats)): ?>
+                        <?php if (!empty($department_stats)): ?>
+                            <div style="display: flex; flex-direction: column; gap: 12px;">
                                 <?php foreach ($department_stats as $dept): ?>
                                     <div class="dept-item">
-                                        <span class="dept-name"><?php echo htmlspecialchars($dept['department']); ?></span>
-                                        <div class="dept-progress">
+                                        <div style="font-weight: 600; flex: 1;"><?php echo htmlspecialchars($dept['department'] ?? 'Unknown'); ?></div>
+                                        <div style="display: flex; align-items: center; gap: 16px; width: 200px;">
                                             <div class="progress-bar">
-                                                <div class="progress-fill" style="width: <?php echo $dept['avg_progress']; ?>%"></div>
+                                                <div class="progress-fill" data-width="<?php echo $dept['avg_progress'] ?? 0; ?>"></div>
                                             </div>
-                                            <span class="progress-text"><?php echo $dept['avg_progress']; ?>%</span>
+                                            <span class="progress-text"><?php echo $dept['avg_progress'] ?? 0; ?>% avg</span>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
                             <?php else: ?>
-                                <div class="empty-state">
-                                    <i class="fas fa-building"></i>
-                                    <p>No department data</p>
-                                </div>
+                                <div class="empty-state"><i class="fas fa-building"></i> <p>No department data</p></div>
                             <?php endif; ?>
-                        </div>
                     </div>
                 </div>
-                
-                <!-- Top Students -->
+
+                <!-- Top Students (with avg progress bar per student) -->
                 <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-crown"></i> Top Students</h3>
-                    </div>
+                    <div class="card-header"><h3><i class="fas fa-crown"></i> Top Students by Progress</h3></div>
                     <div class="card-body">
-                        <div class="top-students-list">
-                            <?php if (!empty($top_students)): ?>
+                        <?php if (!empty($top_students)): ?>
+                            <div style="display: flex; flex-direction: column; gap: 12px;">
                                 <?php foreach ($top_students as $index => $student): ?>
                                     <div class="student-item">
-                                        <div class="student-avatar">
-                                            <?php echo strtoupper(substr($student['name'], 0, 1)); ?>
-                                        </div>
-                                        <div class="student-info">
-                                            <div class="student-name">
-                                                <?php echo htmlspecialchars($student['name']); ?>
+                                        <div class="student-avatar"><?php echo strtoupper(substr($student['name'] ?? 'U', 0, 1)); ?></div>
+                                        <div style="flex: 1;">
+                                            <div style="font-weight: 600;">
+                                                <?php echo htmlspecialchars($student['name'] ?? 'Unknown'); ?>
                                                 <?php if ($index < 3): ?>
-                                                    <span style="font-size: 11px; background: #f59e0b; color: white; padding: 2px 6px; border-radius: 10px; margin-left: 5px;">
-                                                        Top <?php echo $index + 1; ?>
-                                                    </span>
+                                                    <span style="font-size: 12px; background: var(--warning); color: white; padding: 4px 8px; border-radius: 20px; margin-left: 8px;">Top <?php echo $index + 1; ?></span>
                                                 <?php endif; ?>
                                             </div>
-                                            <div class="student-details">
-                                                <?php echo htmlspecialchars($student['department']); ?>
+                                            <div style="font-size: 14px; color: var(--gray-500);"><?php echo htmlspecialchars($student['department'] ?? 'N/A'); ?></div>
+                                            <div style="margin-top: 8px;">
+                                                <div class="progress-bar">
+                                                    <div class="progress-fill" data-width="<?php echo $student['avg_progress'] ?? 0; ?>"></div>
+                                                </div>
+                                                <span style="font-size: 13px; color: var(--gray-700);"><?php echo $student['avg_progress'] ?? 0; ?>% average progress</span>
                                             </div>
                                         </div>
-                                        <div class="student-score">
-                                            <?php echo $student['completed_goals']; ?>/<?php echo $student['total_goals']; ?>
-                                            <div style="font-size: 11px; color: #6b7280; text-align: right;">
-                                                <?php echo $student['total_points']; ?> pts
-                                            </div>
+                                        <div style="text-align: right;">
+                                            <div style="font-weight: 700; color: var(--success);"><?php echo $student['completed_goals'] ?? 0; ?>/<?php echo $student['total_goals'] ?? 0; ?> completed</div>
+                                            <div style="font-size: 13px; color: var(--gray-500);"><?php echo $student['total_points'] ?? 0; ?> pts</div>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
                             <?php else: ?>
-                                <div class="empty-state">
-                                    <i class="fas fa-user-graduate"></i>
-                                    <p>No student data</p>
-                                </div>
+                                <div class="empty-state"><i class="fas fa-user-graduate"></i> <p>No student data</p></div>
                             <?php endif; ?>
-                        </div>
                     </div>
                 </div>
-                
-                <!-- Goal Status Distribution -->
+
+                <!-- Goal Status Distribution (progress-based categories) -->
                 <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-chart-pie"></i> Goal Status</h3>
-                    </div>
+                    <div class="card-header"><h3><i class="fas fa-chart-pie"></i> Goal Progress Overview</h3></div>
                     <div class="card-body">
-                        <div class="status-distribution">
+                        <div style="display: flex; flex-direction: column; gap: 16px;">
                             <?php 
-                            $total = $total_assigned;
+                            $total = $total_assigned ?? 0;
                             $statuses = [
-                                'completed' => $completed_goals,
-                                'in_progress' => $in_progress_goals,
-                                'pending' => $total_assigned - $completed_goals - $in_progress_goals - $overdue_goals,
-                                'overdue' => $overdue_goals
+                                'pending' => $pending_count ?? 0,
+                                'in_progress' => $in_progress_count ?? 0,
+                                'completed' => $completed_count ?? 0,
+                                'overdue' => $overdue_count ?? 0
                             ];
-                            
-                            foreach ($statuses as $status => $count):
+                            $labels = [
+                                'pending' => 'Pending (0%)',
+                                'in_progress' => 'In Progress (1%-99%)',
+                                'completed' => 'Completed (100%)',
+                                'overdue' => 'Overdue (<100% & past due)'
+                            ];
+                            $colors = [
+                                'pending' => 'var(--warning)',
+                                'in_progress' => 'var(--info)',
+                                'completed' => 'var(--success)',
+                                'overdue' => 'var(--danger)'
+                            ];
+                            foreach ($statuses as $key => $count):
                                 $percentage = $total > 0 ? round(($count / $total) * 100) : 0;
                             ?>
-                                <div class="status-item status-<?php echo str_replace('_', '-', $status); ?>">
+                                <div class="status-item status-<?php echo $key; ?>">
                                     <span class="status-count"><?php echo $count; ?></span>
-                                    <span class="status-label"><?php echo ucfirst(str_replace('_', ' ', $status)); ?></span>
+                                    <span class="status-label"><?php echo $labels[$key]; ?></span>
                                     <div class="status-bar">
-                                        <div class="status-fill" style="width: <?php echo $percentage; ?>%"></div>
+                                        <div class="status-fill" data-width="<?php echo $percentage; ?>" style="background: <?php echo $colors[$key]; ?>;"></div>
                                     </div>
                                     <span class="status-percentage"><?php echo $percentage; ?>%</span>
                                 </div>
@@ -1208,121 +802,75 @@ $sidebar_stats = [
                     </div>
                 </div>
             </div>
-            
-            <!-- Quick Actions -->
-            <div style="margin-top: 30px;">
-                <h3 style="margin-bottom: 20px; color: #111827; font-size: 18px;">Quick Actions</h3>
-                <div class="quick-actions-grid">
-                    <a href="students.php" class="quick-action">
-                        <i class="fas fa-users"></i>
-                        <span>Manage Students</span>
-                    </a>
-                    <a href="goals.php" class="quick-action">
-                        <i class="fas fa-bullseye"></i>
-                        <span>System Goals</span>
-                    </a>
-                    <a href="assign_goals.php" class="quick-action">
-                        <i class="fas fa-tasks"></i>
-                        <span>Assign Goals</span>
-                    </a>
-                    <a href="achievements.php" class="quick-action">
-                        <i class="fas fa-trophy"></i>
-                        <span>Achievements</span>
-                    </a>
-                    <a href="reports.php" class="quick-action">
-                        <i class="fas fa-chart-bar"></i>
-                        <span>Reports</span>
-                    </a>
-                    <a href="settings.php" class="quick-action">
-                        <i class="fas fa-cog"></i>
-                        <span>Settings</span>
-                    </a>
-                </div>
+
+            <h3 style="font-size: 20px; margin-bottom: 20px;">Quick Actions</h3>
+            <div class="quick-actions-grid">
+                <a href="students.php" class="quick-action"><i class="fas fa-users"></i> <span>Manage Students</span></a>
+                <a href="goals.php" class="quick-action"><i class="fas fa-bullseye"></i> <span>System Goals</span></a>
+                <a href="assign_goals.php" class="quick-action"><i class="fas fa-tasks"></i> <span>Assign Goals</span></a>
+                <a href="achievements.php" class="quick-action"><i class="fas fa-trophy"></i> <span>Achievements</span></a>
+                <a href="reports.php" class="quick-action"><i class="fas fa-chart-bar"></i> <span>Reports</span></a>
+                <a href="settings.php" class="quick-action"><i class="fas fa-cog"></i> <span>Settings</span></a>
             </div>
-            
-            <!-- System Status -->
-            <div style="background: white; border-radius: 12px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-top: 30px;">
-                <h3 style="margin: 0 0 20px 0; color: #111827; font-size: 18px;">
-                    <i class="fas fa-server"></i> System Status
-                </h3>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
-                    <div style="text-align: center; padding: 15px; background: #f9fafb; border-radius: 8px;">
-                        <div style="font-size: 24px; font-weight: 700; color: #10b981;">100%</div>
-                        <div style="font-size: 12px; color: #6b7280;">Uptime</div>
-                    </div>
-                    <div style="text-align: center; padding: 15px; background: #f9fafb; border-radius: 8px;">
-                        <div style="font-size: 24px; font-weight: 700; color: #3b82f6;"><?php echo date('H:i'); ?></div>
-                        <div style="font-size: 12px; color: #6b7280;">Current Time</div>
-                    </div>
-                    <div style="text-align: center; padding: 15px; background: #f9fafb; border-radius: 8px;">
-                        <div style="font-size: 24px; font-weight: 700; color: #f59e0b;"><?php echo date('M d, Y'); ?></div>
-                        <div style="font-size: 12px; color: #6b7280;">Today's Date</div>
-                    </div>
-                    <div style="text-align: center; padding: 15px; background: #f9fafb; border-radius: 8px;">
-                        <div style="font-size: 24px; font-weight: 700; color: #8b5cf6;">v1.0.0</div>
-                        <div style="font-size: 12px; color: #6b7280;">System Version</div>
+
+            <div class="card" style="margin-top: 40px;">
+                <div class="card-header"><h3><i class="fas fa-server"></i> System Status</h3></div>
+                <div class="card-body">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px;">
+                        <div style="text-align: center; padding: 20px; background: var(--gray-100); border-radius: 10px;">
+                            <div style="font-size: 28px; font-weight: 700; color: var(--success);">100%</div>
+                            <div style="font-size: 14px; color: var(--gray-500);">Uptime</div>
+                        </div>
+                        <div style="text-align: center; padding: 20px; background: var(--gray-100); border-radius: 10px;">
+                            <div style="font-size: 28px; font-weight: 700; color: var(--info);"><?php echo date('H:i'); ?></div>
+                            <div style="font-size: 14px; color: var(--gray-500);">Current Time</div>
+                        </div>
+                        <div style="text-align: center; padding: 20px; background: var(--gray-100); border-radius: 10px;">
+                            <div style="font-size: 28px; font-weight: 700; color: var(--warning);"><?php echo date('M d, Y'); ?></div>
+                            <div style="font-size: 14px; color: var(--gray-500);">Today's Date</div>
+                        </div>
+                        <div style="text-align: center; padding: 20px; background: var(--gray-100); border-radius: 10px;">
+                            <div style="font-size: 28px; font-weight: 700; color: var(--purple);">v1.0.0</div>
+                            <div style="font-size: 14px; color: var(--gray-500);">Version</div>
+                        </div>
                     </div>
                 </div>
             </div>
         </main>
     </div>
-    
-    <!-- JavaScript -->
-    <script>
-        // Mobile sidebar toggle
-        const sidebarToggle = document.getElementById('sidebarToggle');
-        const sidebar = document.getElementById('sidebar');
-        const sidebarClose = document.getElementById('sidebarClose');
-        
-        if (sidebarToggle) {
-            sidebarToggle.addEventListener('click', function() {
-                sidebar.classList.add('active');
-            });
-        }
-        
-        if (sidebarClose) {
-            sidebarClose.addEventListener('click', function() {
-                sidebar.classList.remove('active');
-            });
-        }
-        
-        // Close sidebar when clicking outside on mobile
-        document.addEventListener('click', function(event) {
-            if (window.innerWidth <= 768 && sidebar && sidebar.classList.contains('active') && !sidebar.contains(event.target) && !sidebarToggle.contains(event.target)) {
-                sidebar.classList.remove('active');
-            }
-        });
-        
-        // Handle window resize
-        window.addEventListener('resize', function() {
-            if (window.innerWidth > 768 && sidebar && sidebar.classList.contains('active')) {
-                sidebar.classList.remove('active');
-            }
-        });
-        
-        // Auto-refresh data every 60 seconds
-        setInterval(() => {
-            // In a real implementation, this would fetch updated stats via AJAX
-            console.log('Auto-refreshing dashboard data...');
-        }, 60000);
 
-const observer = new IntersectionObserver((entries) => {
+    <script>
+        const sidebar = document.getElementById('sidebar');
+        const sidebarToggle = document.getElementById('sidebarToggle');
+        const sidebarClose = document.getElementById('sidebarClose');
+        const overlay = document.getElementById('sidebarOverlay');
+
+        function openSidebar() {
+            sidebar.classList.add('active');
+            overlay.classList.add('active');
+        }
+
+        function closeSidebar() {
+            sidebar.classList.remove('active');
+            overlay.classList.remove('active');
+        }
+
+        sidebarToggle?.addEventListener('click', openSidebar);
+        sidebarClose?.addEventListener('click', closeSidebar);
+        overlay?.addEventListener('click', closeSidebar);
+
+        // Progress animation on scroll
+        const observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
-                    entry.target.querySelectorAll('.progress-fill').forEach(bar => {
+                    entry.target.querySelectorAll('.progress-fill, .status-fill').forEach(bar => {
                         bar.style.width = bar.dataset.width + '%';
                     });
                 }
             });
-        });
+        }, { threshold: 0.2 });
 
-        document.querySelectorAll('.card').forEach(card => {
-            observer.observe(card);
-            card.querySelectorAll('.progress-fill').forEach(bar => {
-                bar.dataset.width = bar.style.width.replace('%', '');
-                bar.style.width = '0';
-            });
-        });
+        document.querySelectorAll('.card').forEach(card => observer.observe(card));
     </script>
 </body>
 </html>

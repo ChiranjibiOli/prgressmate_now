@@ -8,7 +8,6 @@ $success = $_SESSION['success'] ?? '';
 $error = $_SESSION['error'] ?? '';
 unset($_SESSION['success'], $_SESSION['error']);
 
-
 // === Fetch Stats for Sidebar ===
 $total_goals = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ?");
 $total_goals->execute([$student_id]);
@@ -29,12 +28,43 @@ $streak = $streak->fetchColumn() ?: 0;
 $unread = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0");
 $unread->execute([$student_id]);
 $unread = $unread->fetchColumn();
-// Fetch all goals
-$goals = $pdo->prepare("SELECT * FROM student_goals WHERE student_id=? ORDER BY status='overdue', priority DESC, due_date ASC");
-$goals->execute([$student_id]);
-$goals = $goals->fetchAll();
 
-// Update progress via POST
+// === DELETE GOAL ===
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_goal'])) {
+    $goal_id = $_POST['goal_id'];
+    
+    // Verify ownership
+    $check = $pdo->prepare("SELECT id FROM student_goals WHERE id = ? AND student_id = ?");
+    $check->execute([$goal_id, $student_id]);
+    
+    if ($check->fetch()) {
+        try {
+            $pdo->beginTransaction();
+            
+            // Delete related records first (due to foreign keys)
+            $pdo->prepare("DELETE FROM goal_progress WHERE goal_id = ?")->execute([$goal_id]);
+            $pdo->prepare("DELETE FROM progress_history WHERE goal_id = ?")->execute([$goal_id]);
+            $pdo->prepare("DELETE FROM reminders WHERE goal_id = ?")->execute([$goal_id]);
+            
+            // Delete the goal
+            $stmt = $pdo->prepare("DELETE FROM student_goals WHERE id = ? AND student_id = ?");
+            $stmt->execute([$goal_id, $student_id]);
+            
+            $pdo->commit();
+            $_SESSION['success'] = "Goal deleted successfully!";
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            $_SESSION['error'] = "Failed to delete goal: " . $e->getMessage();
+        }
+    } else {
+        $_SESSION['error'] = "Goal not found or you don't have permission to delete it.";
+    }
+    
+    header("Location: goals.php");
+    exit;
+}
+
+// === UPDATE PROGRESS ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_progress'])) {
     $goal_id = $_POST['goal_id'];
     $progress = floatval($_POST['progress_value'] ?? 0);
@@ -44,16 +74,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_progress'])) {
     $goal = $goal->fetch();
 
     if ($goal) {
-       $new_val = min($goal['current_value'] + $progress, $goal['target_value']);
-
-if ((float)$goal['target_value'] > 0) {
-    $percentage = ($new_val / $goal['target_value']) * 100;
-} else {
-    $percentage = 0;
-}
-
-$status = $percentage >= 100 ? 'completed' : 'in_progress';
-
+        $new_val = min($goal['current_value'] + $progress, $goal['target_value']);
+        
+        if ((float)$goal['target_value'] > 0) {
+            $percentage = ($new_val / $goal['target_value']) * 100;
+        } else {
+            $percentage = 0;
+        }
+        
+        $status = $percentage >= 100 ? 'completed' : 'in_progress';
 
         $stmt = $pdo->prepare("UPDATE student_goals SET current_value=?, progress_percentage=?, status=?, updated_at=NOW() WHERE id=? AND student_id=?");
         $stmt->execute([$new_val, $percentage, $status, $goal_id, $student_id]);
@@ -67,8 +96,57 @@ $status = $percentage >= 100 ? 'completed' : 'in_progress';
         exit;
     }
 }
-?>
 
+// === EDIT GOAL ===
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_goal'])) {
+    $goal_id = $_POST['goal_id'];
+    $title = $_POST['title'] ?? '';
+    $description = $_POST['description'] ?? '';
+    $category = $_POST['category'] ?? '';
+    $priority = $_POST['priority'] ?? 'medium';
+    $due_date = $_POST['due_date'] ?? '';
+    $target_value = $_POST['target_value'] ?? 0;
+    $unit = $_POST['unit'] ?? '';
+
+    // Verify ownership
+    $check = $pdo->prepare("SELECT id FROM student_goals WHERE id = ? AND student_id = ?");
+    $check->execute([$goal_id, $student_id]);
+    
+    if ($check->fetch()) {
+        // If target value changed, recalculate progress percentage
+        $goal = $pdo->prepare("SELECT current_value FROM student_goals WHERE id = ?");
+        $goal->execute([$goal_id]);
+        $goal = $goal->fetch();
+        
+        if ($target_value > 0) {
+            $percentage = ($goal['current_value'] / $target_value) * 100;
+        } else {
+            $percentage = 0;
+        }
+        
+        $stmt = $pdo->prepare("UPDATE student_goals SET title=?, description=?, category=?, priority=?, due_date=?, target_value=?, unit=?, progress_percentage=?, updated_at=NOW() WHERE id=? AND student_id=?");
+        
+        if ($stmt->execute([$title, $description, $category, $priority, $due_date, $target_value, $unit, $percentage, $goal_id, $student_id])) {
+            $_SESSION['success'] = "Goal updated successfully!";
+        } else {
+            $_SESSION['error'] = "Failed to update goal.";
+        }
+    } else {
+        $_SESSION['error'] = "Goal not found or you don't have permission to edit it.";
+    }
+    
+    header("Location: goals.php");
+    exit;
+}
+
+// Fetch all goals
+$goals = $pdo->prepare("SELECT * FROM student_goals WHERE student_id=? ORDER BY status='overdue', priority DESC, due_date ASC");
+$goals->execute([$student_id]);
+$goals = $goals->fetchAll();
+
+// Fetch available categories for edit form
+$categories = $pdo->query("SELECT DISTINCT category FROM student_goals WHERE category IS NOT NULL AND student_id = $student_id UNION SELECT name FROM categories WHERE is_global = 1 OR created_by = $student_id")->fetchAll(PDO::FETCH_COLUMN);
+?>
 
 <!DOCTYPE html>
 <html lang="en">
@@ -1340,12 +1418,13 @@ img {
 }
 </style>
 </head>
-<body>
+
     <!-- MOBILE TOGGLE -->
+   <body>
     <button class="mobile-toggle" id="sidebarToggle"><i class="fas fa-bars"></i></button>
 
     <div class="dashboard-wrapper">
-        <!-- SIDEBAR (with fixed stats) -->
+        <!-- SIDEBAR -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <div class="logo"><i class="fas fa-star"></i> <span>ProgressMate</span></div>
@@ -1456,9 +1535,24 @@ img {
                                         <span class="goal-category"><?php echo htmlspecialchars($goal['category']); ?></span>
                                     <?php endif; ?>
                                 </div>
-                                <span class="goal-status status-<?php echo $goal['status']; ?>">
-                                    <?php echo ucfirst(str_replace('_', ' ', $goal['status'])); ?>
-                                </span>
+                                <div class="goal-header-actions">
+                                    <span class="goal-status status-<?php echo $goal['status']; ?>">
+                                        <?php echo ucfirst(str_replace('_', ' ', $goal['status'])); ?>
+                                    </span>
+                                    <div class="dropdown">
+                                        <button class="dropdown-toggle" type="button">
+                                            <i class="fas fa-ellipsis-v"></i>
+                                        </button>
+                                        <div class="dropdown-menu">
+                                            <a href="#" onclick="openEditGoalModal(<?php echo $goal['id']; ?>)" class="dropdown-item">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </a>
+                                            <a href="#" onclick="openDeleteModal(<?php echo $goal['id']; ?>, '<?php echo addslashes($goal['title']); ?>')" class="dropdown-item text-danger">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="goal-body">
@@ -1479,6 +1573,9 @@ img {
                                                 <?php echo $days_left; ?> day<?php echo $days_left != 1 ? 's' : ''; ?> left
                                             <?php endif; ?>
                                         </div>
+                                    <?php endif; ?>
+                                    <?php if ($goal['unit']): ?>
+                                        <div class="goal-meta-item"><i class="fas fa-ruler"></i> <?php echo htmlspecialchars($goal['unit']); ?></div>
                                     <?php endif; ?>
                                 </div>
 
@@ -1507,6 +1604,9 @@ img {
                                         <i class="fas fa-arrow-up"></i> Update
                                     </button>
                                 <?php endif; ?>
+                                <button class="btn btn-sm btn-secondary" onclick="openEditGoalModal(<?php echo $goal['id']; ?>)">
+                                    <i class="fas fa-edit"></i> Edit
+                                </button>
                             </div>
                         </div>
 
@@ -1552,7 +1652,7 @@ img {
                     <input type="hidden" name="goal_id" id="modal_goal_id">
 
                     <p><strong>Goal:</strong> <span id="modal_goal_title"></span></p>
-                    <p><strong>Remaining:</strong> <span id="modal_remaining"></span> <?php echo $goal['unit'] ?? ''; ?></p>
+                    <p><strong>Remaining:</strong> <span id="modal_remaining"></span></p>
 
                     <div class="form-group">
                         <label>Progress Added</label>
@@ -1568,13 +1668,144 @@ img {
         </div>
     </div>
 
+    <!-- Edit Goal Modal -->
+    <div class="modal-overlay" id="editGoalModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Edit Goal</h3>
+                <button class="modal-close" onclick="closeEditGoalModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <form method="POST" id="editGoalForm">
+                    <input type="hidden" name="edit_goal" value="1">
+                    <input type="hidden" name="goal_id" id="edit_goal_id">
+
+                    <div class="form-group">
+                        <label>Goal Title *</label>
+                        <input type="text" name="title" id="edit_title" required placeholder="e.g., Complete React Course">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea name="description" id="edit_description" rows="3" placeholder="Describe your goal..."></textarea>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Category</label>
+                            <select name="category" id="edit_category">
+                                <option value="">Select Category</option>
+                                <?php foreach ($categories as $cat): ?>
+                                    <option value="<?php echo htmlspecialchars($cat); ?>"><?php echo htmlspecialchars($cat); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Priority</label>
+                            <select name="priority" id="edit_priority">
+                                <option value="low">Low</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Target Value *</label>
+                            <input type="number" name="target_value" id="edit_target_value" step="0.01" min="0.01" required placeholder="e.g., 100">
+                        </div>
+                        <div class="form-group">
+                            <label>Unit</label>
+                            <input type="text" name="unit" id="edit_unit" placeholder="e.g., pages, hours, kg">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Due Date</label>
+                        <input type="date" name="due_date" id="edit_due_date">
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Update Goal</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div class="modal-overlay" id="deleteModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Delete Goal</h3>
+                <button class="modal-close" onclick="closeDeleteModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete "<span id="delete_goal_title"></span>"?</p>
+                <p class="text-danger"><i class="fas fa-exclamation-triangle"></i> This action cannot be undone. All progress and history will be deleted.</p>
+                <form method="POST" id="deleteForm">
+                    <input type="hidden" name="delete_goal" value="1">
+                    <input type="hidden" name="goal_id" id="delete_goal_id">
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeDeleteModal()">Cancel</button>
+                        <button type="submit" class="btn btn-danger">Delete Goal</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // Function to fetch goal data and populate edit form
+        function openEditGoalModal(goalId) {
+            // Fetch goal data via AJAX
+            fetch(`get_goal.php?id=${goalId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const goal = data.goal;
+                        document.getElementById('edit_goal_id').value = goal.id;
+                        document.getElementById('edit_title').value = goal.title;
+                        document.getElementById('edit_description').value = goal.description || '';
+                        document.getElementById('edit_category').value = goal.category || '';
+                        document.getElementById('edit_priority').value = goal.priority;
+                        document.getElementById('edit_target_value').value = goal.target_value;
+                        document.getElementById('edit_unit').value = goal.unit || '';
+                        document.getElementById('edit_due_date').value = goal.due_date || '';
+                        
+                        document.getElementById('editGoalModal').style.display = 'flex';
+                    } else {
+                        alert('Failed to load goal data.');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Error loading goal data.');
+                });
+        }
+
+        function closeEditGoalModal() {
+            document.getElementById('editGoalModal').style.display = 'none';
+        }
+
+        // Delete modal functions
+        function openDeleteModal(goalId, goalTitle) {
+            document.getElementById('delete_goal_id').value = goalId;
+            document.getElementById('delete_goal_title').textContent = goalTitle;
+            document.getElementById('deleteModal').style.display = 'flex';
+        }
+
+        function closeDeleteModal() {
+            document.getElementById('deleteModal').style.display = 'none';
+        }
+
+        // Existing functions
         function openUpdateProgressModal(id, title, remaining) {
             document.getElementById('modal_goal_id').value = id;
             document.getElementById('modal_goal_title').textContent = title;
             document.getElementById('modal_remaining').textContent = remaining;
             document.getElementById('updateProgressModal').style.display = 'flex';
         }
+
         function closeUpdateProgressModal() {
             document.getElementById('updateProgressModal').style.display = 'none';
         }
@@ -1582,6 +1813,23 @@ img {
         // Mobile sidebar
         document.getElementById('sidebarToggle')?.addEventListener('click', () => document.getElementById('sidebar').classList.add('active'));
         document.getElementById('sidebarClose')?.addEventListener('click', () => document.getElementById('sidebar').classList.remove('active'));
+
+        // Dropdown menu functionality
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('.dropdown')) {
+                document.querySelectorAll('.dropdown-menu').forEach(menu => {
+                    menu.style.display = 'none';
+                });
+            }
+        });
+
+        document.querySelectorAll('.dropdown-toggle').forEach(toggle => {
+            toggle.addEventListener('click', function(e) {
+                e.stopPropagation();
+                const menu = this.nextElementSibling;
+                menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+            });
+        });
     </script>
 </body>
 </html>
