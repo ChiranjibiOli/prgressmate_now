@@ -1,4 +1,6 @@
 <?php
+// students/create_goal.php
+
 session_start();
 require_once '../includes/db_connection.php';
 checkAuth('student');
@@ -9,15 +11,15 @@ $error = $_SESSION['error'] ?? '';
 unset($_SESSION['success'], $_SESSION['error']);
 
 // === Fetch Sidebar Stats ===
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ?");
+$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ? AND deleted_at IS NULL");
 $stmt->execute([$student_id]);
 $total_goals = $stmt->fetchColumn() ?: 0;
 
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ? AND status = 'completed'");
+$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ? AND status = 'completed' AND deleted_at IS NULL");
 $stmt->execute([$student_id]);
 $completed_goals = $stmt->fetchColumn() ?: 0;
 
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ? AND status = 'in_progress'");
+$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ? AND status = 'in_progress' AND deleted_at IS NULL");
 $stmt->execute([$student_id]);
 $in_progress_goals = $stmt->fetchColumn() ?: 0;
 
@@ -34,9 +36,13 @@ $stmt->execute([$student_id]);
 $unread = $stmt->fetchColumn() ?: 0;
 
 // === Fetch Previous Categories for Suggestions ===
-$cat_stmt = $pdo->prepare("SELECT DISTINCT category FROM student_goals WHERE student_id = ? AND category IS NOT NULL AND category != '' ORDER BY category");
+$cat_stmt = $pdo->prepare("SELECT DISTINCT category FROM student_goals WHERE student_id = ? AND category IS NOT NULL AND category != '' AND deleted_at IS NULL ORDER BY category");
 $cat_stmt->execute([$student_id]);
 $categories = $cat_stmt->fetchAll(PDO::FETCH_COLUMN);
+
+// Also fetch system categories
+$system_categories = $pdo->query("SELECT name FROM categories WHERE (is_global = 1 OR created_by = $student_id) AND deleted_at IS NULL ORDER BY name")->fetchAll(PDO::FETCH_COLUMN);
+$all_categories = array_unique(array_merge($categories, $system_categories));
 
 // === Preserve Form Data on Error ===
 $form_data = [
@@ -46,7 +52,8 @@ $form_data = [
     'target_value' => $_POST['target_value'] ?? '',
     'unit' => $_POST['unit'] ?? '',
     'due_date' => $_POST['due_date'] ?? '',
-    'priority' => $_POST['priority'] ?? 'medium'
+    'priority' => $_POST['priority'] ?? 'medium',
+    'estimated_hours' => $_POST['estimated_hours'] ?? ''
 ];
 
 // === Handle Form Submission ===
@@ -58,26 +65,85 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $unit = trim($_POST['unit'] ?? '');
     $due_date = $_POST['due_date'] ?: null;
     $priority = in_array($_POST['priority'] ?? 'medium', ['low','medium','high']) ? $_POST['priority'] : 'medium';
+    $estimated_hours = !empty($_POST['estimated_hours']) ? floatval($_POST['estimated_hours']) : null;
+    $start_date = $_POST['start_date'] ?: date('Y-m-d');
 
-    if (!$title || $target_value <= 0 || !$unit) {
-        $error = "Title, target value (greater than 0), and unit are required.";
-    } elseif ($due_date && $due_date < date('Y-m-d')) {
-        $error = "Due date cannot be in the past.";
-    } else {
+    // Validation
+    $errors = [];
+    
+    if (empty($title)) {
+        $errors[] = "Goal title is required.";
+    } elseif (strlen($title) < 3) {
+        $errors[] = "Title must be at least 3 characters.";
+    }
+    
+    if ($target_value <= 0) {
+        $errors[] = "Target value must be greater than 0.";
+    }
+    
+    if (empty($unit)) {
+        $errors[] = "Unit is required (e.g., hours, pages, chapters).";
+    }
+    
+    if ($due_date && $due_date < date('Y-m-d')) {
+        $errors[] = "Due date cannot be in the past.";
+    }
+    
+    if ($start_date && $due_date && $start_date > $due_date) {
+        $errors[] = "Start date cannot be after due date.";
+    }
+    
+    if ($estimated_hours !== null && $estimated_hours <= 0) {
+        $errors[] = "Estimated hours must be greater than 0 if provided.";
+    }
+
+    if (empty($errors)) {
         try {
             $pdo->beginTransaction();
 
             // Insert into student_goals
             $stmt = $pdo->prepare("INSERT INTO student_goals 
-                (student_id, title, description, category, target_value, current_value, unit, due_date, priority, status, is_self_created, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 'pending', 1, NOW(), NOW())");
-            $stmt->execute([$student_id, $title, $description, $category, $target_value, $unit, $due_date, $priority]);
+                (student_id, title, description, category, target_value, current_value, unit, 
+                 start_date, due_date, priority, status, is_self_created, estimated_hours,
+                 progress_percentage, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', 1, ?, 0, NOW(), NOW())");
+            
+            $stmt->execute([
+                $student_id, 
+                $title, 
+                $description, 
+                $category, 
+                $target_value, 
+                $unit,
+                $start_date,
+                $due_date, 
+                $priority,
+                $estimated_hours
+            ]);
 
-            // Optional: Sync to admin_goals for admin visibility
+            $new_goal_id = $pdo->lastInsertId();
+
+            // Optional: Also insert into admin_goals for admin visibility
+            // (Only if you want student-created goals to be visible to admins)
+            /*
             $stmt2 = $pdo->prepare("INSERT INTO admin_goals 
-                (title, description, category, target_value, unit, due_date, priority, status, created_by, created_at)
+                (title, description, category, target_value, unit, due_date, priority, 
+                 status, created_by, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, NOW())");
-            $stmt2->execute([$title, $description, $category, $target_value, $unit, $due_date, $priority, $student_id]);
+            $stmt2->execute([
+                $title, $description, $category, $target_value, $unit, 
+                $due_date, $priority, $student_id
+            ]);
+            */
+
+            // Create a notification for the student
+            $notification_msg = "New goal created: " . htmlspecialchars($title);
+            $notif_stmt = $pdo->prepare("
+                INSERT INTO notifications 
+                (user_id, title, message, type, related_id, related_type, created_at)
+                VALUES (?, 'Goal Created', ?, 'goal', ?, 'student_goal', NOW())
+            ");
+            $notif_stmt->execute([$student_id, $notification_msg, $new_goal_id]);
 
             $pdo->commit();
 
@@ -86,13 +152,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         } catch (Exception $e) {
             $pdo->rollBack();
-            $error = "Error creating goal. Please try again.";
+            $error = "Error creating goal: " . $e->getMessage();
         }
+    } else {
+        $error = implode(" ", $errors);
     }
 }
 ?>
-
-
 
 <!DOCTYPE html>
 <html lang="en">
@@ -100,461 +166,338 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Create Goal - ProgressMate</title>
-    <link rel="stylesheet" href="../assets/css/style.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-   <style>
-/* ===== CSS VARIABLES & THEME ===== */
-:root {
-    /* Primary Colors */
-    --primary: #4f46e5;
-    --primary-light: #eef2ff;
-    --primary-dark: #4338ca;
-    
-    /* Secondary Colors */
-    --secondary: #64748b;
-    --secondary-light: #f8fafc;
-    --secondary-dark: #475569;
-    
-    /* Status Colors */
-    --success: #10b981;
-    --success-light: #d1fae5;
-    --warning: #f59e0b;
-    --warning-light: #fef3c7;
-    --danger: #ef4444;
-    --danger-light: #fee2e2;
-    --info: #3b82f6;
-    --info-light: #dbeafe;
-    
-    /* Neutral Colors */
-    --dark: #1e293b;
-    --light: #f1f5f9;
-    --white: #ffffff;
-    --gray: #e2e8f0;
-    --gray-light: #f9fafb;
-    --gray-dark: #6b7280;
-    
-    /* Typography */
-    --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    --font-size-xs: 0.75rem;
-    --font-size-sm: 0.875rem;
-    --font-size-base: 1rem;
-    --font-size-lg: 1.125rem;
-    --font-size-xl: 1.25rem;
-    --font-size-2xl: 1.5rem;
-    --font-size-3xl: 1.875rem;
-    --font-size-4xl: 2.25rem;
-    
-    /* Spacing */
-    --spacing-xs: 0.25rem;
-    --spacing-sm: 0.5rem;
-    --spacing-md: 1rem;
-    --spacing-lg: 1.5rem;
-    --spacing-xl: 2rem;
-    --spacing-2xl: 3rem;
-    
-    /* Borders & Shadows */
-    --radius-sm: 0.375rem;
-    --radius-md: 0.5rem;
-    --radius-lg: 0.75rem;
-    --radius-xl: 1rem;
-    --radius-2xl: 1.5rem;
-    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-    
-    /* Transitions */
-    --transition-fast: 150ms ease;
-    --transition-base: 300ms ease;
-    --transition-slow: 500ms ease;
-}
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            /* Primary Colors */
+            --primary: #4f46e5;
+            --primary-light: #eef2ff;
+            --primary-dark: #4338ca;
+            
+            /* Secondary Colors */
+            --secondary: #64748b;
+            --secondary-light: #f8fafc;
+            --secondary-dark: #475569;
+            
+            /* Status Colors */
+            --success: #10b981;
+            --success-light: #d1fae5;
+            --warning: #f59e0b;
+            --warning-light: #fef3c7;
+            --danger: #ef4444;
+            --danger-light: #fee2e2;
+            --info: #3b82f6;
+            --info-light: #dbeafe;
+            --purple: #8b5cf6;
+            
+            /* Neutral Colors */
+            --dark: #1e293b;
+            --light: #f1f5f9;
+            --white: #ffffff;
+            --gray: #e2e8f0;
+            --gray-light: #f9fafb;
+            --gray-dark: #6b7280;
+            
+            /* Typography */
+            --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --font-size-xs: 0.75rem;
+            --font-size-sm: 0.875rem;
+            --font-size-base: 1rem;
+            --font-size-lg: 1.125rem;
+            --font-size-xl: 1.25rem;
+            --font-size-2xl: 1.5rem;
+            --font-size-3xl: 1.875rem;
+            --font-size-4xl: 2.25rem;
+            
+            /* Spacing */
+            --spacing-xs: 0.25rem;
+            --spacing-sm: 0.5rem;
+            --spacing-md: 1rem;
+            --spacing-lg: 1.5rem;
+            --spacing-xl: 2rem;
+            --spacing-2xl: 3rem;
+            
+            /* Borders & Shadows */
+            --radius-sm: 0.375rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+            --radius-xl: 1rem;
+            --radius-2xl: 1.5rem;
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            
+            /* Transitions */
+            --transition-fast: 150ms ease;
+            --transition-base: 300ms ease;
+            --transition-slow: 500ms ease;
+        }
 
-/* ===== BASE RESET ===== */
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
-html {
-    font-size: 16px;
-    scroll-behavior: smooth;
-}
+        html {
+            font-size: 16px;
+            scroll-behavior: smooth;
+        }
 
-body {
-    font-family: var(--font-family);
-    background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
-    color: var(--dark);
-    min-height: 100vh;
-    line-height: 1.5;
-    overflow-x: hidden;
-}
+        body {
+            font-family: var(--font-family);
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
+            color: var(--dark);
+            min-height: 100vh;
+            line-height: 1.5;
+            overflow-x: hidden;
+        }
 
-a {
-    text-decoration: none;
-    color: inherit;
-    transition: color var(--transition-fast);
-}
+        a {
+            text-decoration: none;
+            color: inherit;
+            transition: color var(--transition-fast);
+        }
 
-button {
-    font-family: inherit;
-    cursor: pointer;
-    border: none;
-    background: none;
-    outline: none;
-}
+        button {
+            font-family: inherit;
+            cursor: pointer;
+            border: none;
+            background: none;
+            outline: none;
+        }
 
-input, select, textarea {
-    font-family: inherit;
-    font-size: inherit;
-    outline: none;
-}
+        input, select, textarea {
+            font-family: inherit;
+            font-size: inherit;
+            outline: none;
+        }
 
-img {
-    max-width: 100%;
-    height: auto;
-}
+        /* ===== DASHBOARD LAYOUT ===== */
+        .dashboard-wrapper {
+            display: flex;
+            min-height: 100vh;
+            position: relative;
+        }
 
-/* ===== UTILITY CLASSES ===== */
-.container {
-    width: 100%;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 var(--spacing-md);
-}
+        /* ===== SIDEBAR ===== */
+        .sidebar {
+            width: 280px;
+            background: var(--white);
+            border-right: 1px solid var(--gray);
+            position: fixed;
+            height: 100vh;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            transition: transform var(--transition-base);
+            overflow: hidden;
+            box-shadow: 4px 0 20px rgba(0, 0, 0, 0.08);
+        }
 
-.flex {
-    display: flex;
-}
+        .sidebar-header {
+            padding: var(--spacing-lg);
+            border-bottom: 1px solid var(--gray);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-shrink: 0;
+        }
 
-.flex-col {
-    flex-direction: column;
-}
+        .logo {
+            font-size: var(--font-size-xl);
+            font-weight: 800;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+        }
 
-.items-center {
-    align-items: center;
-}
+        .sidebar-close {
+            display: none;
+            color: var(--secondary);
+            font-size: var(--font-size-xl);
+            background: none;
+            border: none;
+            cursor: pointer;
+            padding: var(--spacing-xs);
+        }
 
-.justify-between {
-    justify-content: space-between;
-}
+        .user-profile {
+            padding: var(--spacing-lg);
+            border-bottom: 1px solid var(--gray);
+            text-align: center;
+            flex-shrink: 0;
+        }
 
-.gap-sm { gap: var(--spacing-sm); }
-.gap-md { gap: var(--spacing-md); }
-.gap-lg { gap: var(--spacing-lg); }
+        .profile-pic {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 4px solid var(--primary-light);
+            margin: 0 auto var(--spacing-md);
+        }
 
-.mt-sm { margin-top: var(--spacing-sm); }
-.mt-md { margin-top: var(--spacing-md); }
-.mt-lg { margin-top: var(--spacing-lg); }
-.mb-sm { margin-bottom: var(--spacing-sm); }
-.mb-md { margin-bottom: var(--spacing-md); }
-.mb-lg { margin-bottom: var(--spacing-lg); }
+        .profile-pic.default {
+            background: linear-gradient(135deg, var(--primary), #8b5cf6);
+            color: var(--white);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: var(--font-size-2xl);
+            font-weight: bold;
+        }
 
-.text-center { text-align: center; }
-.text-right { text-align: right; }
-.text-primary { color: var(--primary); }
-.text-success { color: var(--success); }
-.text-danger { color: var(--danger); }
-.text-warning { color: var(--warning); }
-.text-muted { color: var(--gray-dark); }
+        .user-info h4 {
+            font-size: var(--font-size-lg);
+            font-weight: 600;
+            margin-bottom: var(--spacing-xs);
+        }
 
-.bg-white { background: var(--white); }
-.bg-light { background: var(--light); }
-.bg-primary { background: var(--primary); }
-.bg-success { background: var(--success); }
-.bg-danger { background: var(--danger); }
+        .user-info p {
+            color: var(--secondary);
+            font-size: var(--font-size-sm);
+            margin-bottom: var(--spacing-sm);
+        }
 
-.rounded-sm { border-radius: var(--radius-sm); }
-.rounded-md { border-radius: var(--radius-md); }
-.rounded-lg { border-radius: var(--radius-lg); }
+        .user-tag {
+            display: inline-block;
+            background: var(--primary-light);
+            color: var(--primary);
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: var(--font-size-xs);
+            font-weight: 600;
+        }
 
-.shadow-sm { box-shadow: var(--shadow-sm); }
-.shadow-md { box-shadow: var(--shadow-md); }
-.shadow-lg { box-shadow: var(--shadow-lg); }
+        .nav-menu {
+            flex: 1;
+            padding: var(--spacing-md) 0;
+            overflow-y: auto;
+            min-height: 0;
+        }
 
-/* ===== BUTTONS ===== */
-.btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--spacing-sm);
-    padding: 0.625rem 1.25rem;
-    border-radius: var(--radius-md);
-    font-weight: 500;
-    font-size: var(--font-size-sm);
-    transition: all var(--transition-base);
-    border: 1px solid transparent;
-    cursor: pointer;
-}
+        .nav-menu::-webkit-scrollbar {
+            width: 6px;
+        }
 
-.btn-primary {
-    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-    color: var(--white);
-    box-shadow: var(--shadow-md);
-}
+        .nav-menu::-webkit-scrollbar-track {
+            background: var(--light);
+        }
 
-.btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-lg);
-}
+        .nav-menu::-webkit-scrollbar-thumb {
+            background: var(--gray);
+            border-radius: 3px;
+        }
 
-.btn-outline {
-    background: transparent;
-    color: var(--primary);
-    border-color: var(--primary);
-}
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            padding: 0.875rem var(--spacing-lg);
+            margin: 0 var(--spacing-sm);
+            color: var(--secondary-dark);
+            font-weight: 500;
+            border-radius: var(--radius-md);
+            transition: all var(--transition-base);
+        }
 
-.btn-outline:hover {
-    background: var(--primary);
-    color: var(--white);
-}
+        .nav-link:hover {
+            background: var(--secondary-light);
+            color: var(--primary);
+            transform: translateX(4px);
+        }
 
-.btn-sm {
-    padding: 0.375rem 0.75rem;
-    font-size: var(--font-size-xs);
-}
+        .nav-link.active {
+            background: linear-gradient(90deg, var(--primary-light), transparent);
+            color: var(--primary);
+            font-weight: 600;
+            border-left: 4px solid var(--primary);
+        }
 
-.btn-lg {
-    padding: 0.75rem 1.5rem;
-    font-size: var(--font-size-base);
-}
+        .badge {
+            background: linear-gradient(135deg, var(--danger), #dc2626);
+            color: var(--white);
+            font-size: var(--font-size-xs);
+            padding: 0.25rem 0.5rem;
+            border-radius: 20px;
+            margin-left: auto;
+            font-weight: 700;
+            min-width: 1.5rem;
+            text-align: center;
+        }
 
-/* ===== DASHBOARD LAYOUT - FIXED SIDEBAR WITH SCROLLABLE MAIN ===== */
-.dashboard-wrapper {
-    display: flex;
-    min-height: 100vh;
-    position: relative;
-}
+        .sidebar-quick-stats {
+            padding: var(--spacing-lg);
+            background: var(--secondary-light);
+            border-top: 1px solid var(--gray);
+            flex-shrink: 0;
+        }
 
-/* ===== SIDEBAR - FIXED, NON-SCROLLABLE ===== */
-.sidebar {
-    width: 280px;
-    background: var(--white);
-    border-right: 1px solid var(--gray);
-    position: fixed;
-    height: 100vh;
-    left: 0;
-    top: 0;
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-    transition: transform var(--transition-base);
-    overflow: hidden; /* Changed from auto to hidden */
-    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.08);
-}
+        .sidebar-stat {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            margin-bottom: var(--spacing-md);
+        }
 
-/* Remove scrollbar styles since sidebar is non-scrollable */
-.sidebar::-webkit-scrollbar {
-    display: none;
-}
+        .sidebar-stat:last-child {
+            margin-bottom: 0;
+        }
 
-.sidebar-header {
-    padding: var(--spacing-lg);
-    border-bottom: 1px solid var(--gray);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0; /* Prevent shrinking */
-}
+        .sidebar-stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: var(--radius-md);
+            background: var(--primary-light);
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
 
-.logo {
-    font-size: var(--font-size-xl);
-    font-weight: 800;
-    color: var(--primary);
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-}
+        .sidebar-stat-number {
+            font-size: var(--font-size-lg);
+            font-weight: 700;
+            color: var(--dark);
+        }
 
-.sidebar-close {
-    display: none;
-    color: var(--secondary);
-    font-size: var(--font-size-xl);
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: var(--spacing-xs);
-}
+        .sidebar-stat-label {
+            font-size: var(--font-size-xs);
+            color: var(--secondary);
+        }
 
-.user-profile {
-    padding: var(--spacing-lg);
-    border-bottom: 1px solid var(--gray);
-    text-align: center;
-    flex-shrink: 0; /* Prevent shrinking */
-}
+        .logout-btn {
+            margin: var(--spacing-lg);
+            background: linear-gradient(135deg, var(--danger-light), #fecaca);
+            color: #dc2626;
+            padding: 0.875rem;
+            border-radius: var(--radius-lg);
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: var(--spacing-sm);
+            transition: all var(--transition-base);
+            text-align: center;
+            text-decoration: none;
+            flex-shrink: 0;
+        }
 
-.profile-pic {
-    width: 80px;
-    height: 80px;
-    border-radius: 50%;
-    object-fit: cover;
-    border: 4px solid var(--primary-light);
-    margin: 0 auto var(--spacing-md);
-}
+        .logout-btn:hover {
+            background: linear-gradient(135deg, #fecaca, #fca5a5);
+            transform: translateY(-2px);
+        }
 
-.profile-pic.default {
-    background: linear-gradient(135deg, var(--primary), #8b5cf6);
-    color: var(--white);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: var(--font-size-2xl);
-    font-weight: bold;
-}
-
-.user-info h4 {
-    font-size: var(--font-size-lg);
-    font-weight: 600;
-    margin-bottom: var(--spacing-xs);
-}
-
-.user-info p {
-    color: var(--secondary);
-    font-size: var(--font-size-sm);
-    margin-bottom: var(--spacing-sm);
-}
-
-.user-tag {
-    display: inline-block;
-    background: var(--primary-light);
-    color: var(--primary);
-    padding: 0.25rem 0.75rem;
-    border-radius: 20px;
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-}
-
-/* Nav Menu - Now scrollable within fixed sidebar */
-.nav-menu {
-    flex: 1;
-    padding: var(--spacing-md) 0;
-    overflow-y: auto; /* Only nav menu scrolls */
-    min-height: 0; /* Important for flex scrolling */
-}
-
-.nav-menu::-webkit-scrollbar {
-    width: 6px;
-}
-
-.nav-menu::-webkit-scrollbar-track {
-    background: var(--light);
-}
-
-.nav-menu::-webkit-scrollbar-thumb {
-    background: var(--gray);
-    border-radius: 3px;
-}
-
-.nav-link {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: 0.875rem var(--spacing-lg);
-    margin: 0 var(--spacing-sm);
-    color: var(--secondary-dark);
-    font-weight: 500;
-    border-radius: var(--radius-md);
-    transition: all var(--transition-base);
-}
-
-.nav-link:hover {
-    background: var(--secondary-light);
-    color: var(--primary);
-    transform: translateX(4px);
-}
-
-.nav-link.active {
-    background: linear-gradient(90deg, var(--primary-light), transparent);
-    color: var(--primary);
-    font-weight: 600;
-    border-left: 4px solid var(--primary);
-}
-
-.nav-link i {
-    width: 24px;
-    text-align: center;
-    font-size: 1.125rem;
-}
-
-.badge {
-    background: linear-gradient(135deg, var(--danger), #dc2626);
-    color: var(--white);
-    font-size: var(--font-size-xs);
-    padding: 0.25rem 0.5rem;
-    border-radius: 20px;
-    margin-left: auto;
-    font-weight: 700;
-    min-width: 1.5rem;
-    text-align: center;
-}
-
-.sidebar-quick-stats {
-    padding: var(--spacing-lg);
-    background: var(--secondary-light);
-    border-top: 1px solid var(--gray);
-    flex-shrink: 0; /* Prevent shrinking */
-}
-
-.sidebar-stat {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    margin-bottom: var(--spacing-md);
-}
-
-.sidebar-stat:last-child {
-    margin-bottom: 0;
-}
-
-.sidebar-stat-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: var(--radius-md);
-    background: var(--primary-light);
-    color: var(--primary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.25rem;
-}
-
-.sidebar-stat-number {
-    font-size: var(--font-size-lg);
-    font-weight: 700;
-    color: var(--dark);
-}
-
-.sidebar-stat-label {
-    font-size: var(--font-size-xs);
-    color: var(--secondary);
-}
-
-.logout-btn {
-    margin: var(--spacing-lg);
-    background: linear-gradient(135deg, var(--danger-light), #fecaca);
-    color: #dc2626;
-    padding: 0.875rem;
-    border-radius: var(--radius-lg);
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--spacing-sm);
-    transition: all var(--transition-base);
-    text-align: center;
-    text-decoration: none;
-    flex-shrink: 0; /* Prevent shrinking */
-}
-
-.logout-btn:hover {
-    background: linear-gradient(135deg, #fecaca, #fca5a5);
-    transform: translateY(-2px);
-}
-.main-content {
+        /* ===== MAIN CONTENT ===== */
+        .main-content {
             flex: 1;
             margin-left: 280px;
-            padding: 2.5rem 2rem;
+            padding: var(--spacing-xl);
             min-height: 100vh;
             animation: fadeIn 0.7s ease-out;
         }
@@ -564,71 +507,87 @@ img {
             to { opacity: 1; transform: translateY(0); }
         }
 
+        /* Page Header */
         .page-header {
-            margin-bottom: 3rem;
-            text-align: center;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: var(--spacing-2xl);
+            flex-wrap: wrap;
+            gap: var(--spacing-md);
         }
 
-        .page-header h1 {
-            font-size: 3rem;
+        .header-content h1 {
+            font-size: 2.5rem;
             font-weight: 800;
             color: var(--dark);
-            margin-bottom: 0.75rem;
+            margin-bottom: var(--spacing-xs);
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
 
-        .page-header p {
-            font-size: 1.25rem;
+        .header-content p {
             color: var(--secondary);
+            font-size: var(--font-size-lg);
             max-width: 600px;
-            margin: 0 auto;
         }
 
+        /* Back Button */
         .back-btn {
-            position: absolute;
-            top: 2.5rem;
-            left: 2rem;
-            background: rgba(255,255,255,0.9);
-            backdrop-filter: blur(10px);
+            display: inline-flex;
+            align-items: center;
+            gap: var(--spacing-sm);
             padding: 0.75rem 1.25rem;
+            background: var(--white);
+            color: var(--primary);
+            border: 2px solid var(--primary);
             border-radius: var(--radius-md);
-            box-shadow: var(--shadow-md);
+            font-weight: 600;
             transition: var(--transition);
+            text-decoration: none;
         }
 
         .back-btn:hover {
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-lg);
+            background: var(--primary);
+            color: var(--white);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
         }
 
         /* Alerts */
         .alert {
-            padding: 1.25rem 1.75rem;
+            padding: var(--spacing-md);
             border-radius: var(--radius-md);
-            margin-bottom: 2rem;
+            margin-bottom: var(--spacing-lg);
             display: flex;
             align-items: center;
-            gap: 1rem;
-            font-weight: 600;
-            box-shadow: var(--shadow-md);
-            animation: slideDown 0.5s ease;
+            gap: var(--spacing-sm);
+            animation: slideIn 0.3s ease;
         }
 
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-20px); }
-            to { opacity: 1; transform: translateY(0); }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
         }
 
-        .alert-success { background: var(--success-light); color: #065f46; border-left: 6px solid var(--success); }
-        .alert-error { background: var(--danger-light); color: #991b1b; border-left: 6px solid var(--danger); }
+        .alert-success {
+            background: var(--success-light);
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
 
-        /* Form Container - Modern Card */
+        .alert-error {
+            background: var(--danger-light);
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+        }
+
+        /* Form Container */
         .form-container {
             max-width: 900px;
-            margin: 0 auto 3rem;
+            margin: 0 auto var(--spacing-2xl);
             background: var(--white);
             border-radius: var(--radius-lg);
             padding: 3rem;
@@ -640,7 +599,9 @@ img {
         .form-container::before {
             content: '';
             position: absolute;
-            top: 0; left: 0; right: 0;
+            top: 0;
+            left: 0;
+            right: 0;
             height: 6px;
             background: linear-gradient(90deg, var(--primary), #8b5cf6, var(--success));
         }
@@ -702,7 +663,8 @@ img {
         }
 
         .form-group input:focus,
-        .form-group textarea:focus {
+        .form-group textarea:focus,
+        .form-group select:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 4px var(--primary-light);
             transform: translateY(-2px);
@@ -719,12 +681,20 @@ img {
             gap: 2rem;
         }
 
-        .unit-examples, .form-help {
+        .form-help {
             font-size: 0.9rem;
             color: var(--secondary);
             margin-top: 0.5rem;
         }
 
+        .unit-examples {
+            font-size: 0.85rem;
+            color: var(--gray-dark);
+            margin-top: 0.5rem;
+            font-style: italic;
+        }
+
+        /* Category Suggestions */
         .category-suggestions {
             display: flex;
             flex-wrap: wrap;
@@ -741,12 +711,14 @@ img {
             cursor: pointer;
             transition: var(--transition);
             font-weight: 500;
+            border: 2px solid transparent;
         }
 
         .category-tag:hover {
             background: var(--primary);
             color: white;
             transform: translateY(-2px);
+            border-color: var(--primary);
         }
 
         /* Priority Selector */
@@ -781,15 +753,15 @@ img {
         .priority-option .priority-icon {
             font-size: 2rem;
             margin-bottom: 0.5rem;
-            color: var(--secondary);
-        }
-
-        .priority-option.selected .priority-icon {
-            color: var(--primary);
         }
 
         .priority-option.low .priority-icon { color: #94a3b8; }
+        .priority-option.medium .priority-icon { color: var(--primary); }
         .priority-option.high .priority-icon { color: var(--danger); }
+
+        .priority-option.selected .priority-icon {
+            color: inherit;
+        }
 
         /* Form Actions */
         .form-actions {
@@ -810,12 +782,14 @@ img {
             display: inline-flex;
             align-items: center;
             gap: 0.75rem;
+            cursor: pointer;
         }
 
         .btn-primary {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: white;
             box-shadow: var(--shadow-md);
+            border: none;
         }
 
         .btn-primary:hover {
@@ -883,149 +857,118 @@ img {
             line-height: 1.6;
         }
 
-        /* Responsive */
-        @media (max-width: 992px) {
-            .main-content { margin-left: 0; padding-top: 100px; }
-            .back-btn { position: static; margin-bottom: 2rem; display: inline-flex; }
-            .page-header { text-align: left; }
+        /* Mobile Toggle */
+        .mobile-toggle {
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1100;
+            background: var(--primary);
+            color: white;
+            border: none;
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            font-size: 20px;
+            cursor: pointer;
+            box-shadow: var(--shadow);
         }
 
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 999;
+        }
+
+        /* Responsive */
         @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+                width: 300px;
+            }
+            .sidebar.active { transform: translateX(0); }
+            .sidebar-overlay.active { display: block; }
+            .sidebar-close { display: block; }
+            .mobile-toggle { display: flex; align-items: center; justify-content: center; }
+            .main-content { margin-left: 0; padding: 24px 16px; padding-top: 80px; }
+            .page-header { flex-direction: column; align-items: flex-start; }
             .form-container { padding: 2rem; }
             .form-row { grid-template-columns: 1fr; }
             .form-actions { flex-direction: column; }
             .btn { width: 100%; justify-content: center; }
-            .page-header h1 { font-size: 2.5rem; }
+            .priority-options { flex-direction: column; }
         }
     </style>
 </head>
 <body>
-    <!-- ===== MOBILE MENU TOGGLE ===== -->
-    <button class="mobile-toggle" id="sidebarToggle">
-        <i class="fas fa-bars"></i>
-    </button>
-    
-    <!-- ===== DASHBOARD WRAPPER ===== -->
+    <button class="mobile-toggle" id="sidebarToggle"><i class="fas fa-bars"></i></button>
+    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
     <div class="dashboard-wrapper">
-        
-        <!-- ===== SIDEBAR ===== -->
+        <!-- SIDEBAR -->
         <aside class="sidebar" id="sidebar">
-            <!-- Sidebar Header -->
             <div class="sidebar-header">
-                <div class="logo">
-                    <i class="fas fa-star"></i>
-                    <span>ProgressMate</span>
-                </div>
-                <button class="sidebar-close" id="sidebarClose">
-                    <i class="fas fa-times"></i>
-                </button>
+                <div class="logo"><i class="fas fa-star"></i> ProgressMate</div>
+                <button class="sidebar-close" id="sidebarClose"><i class="fas fa-times"></i></button>
             </div>
-            <!-- User Profile -->
+
             <div class="user-profile">
                 <?php if (!empty($_SESSION['profile_picture'])): ?>
                     <img src="<?php echo '../' . htmlspecialchars($_SESSION['profile_picture']); ?>" alt="Profile" class="profile-pic">
                 <?php else: ?>
-                    <div class="profile-pic default">
-                        <?php echo strtoupper(substr($_SESSION['name'], 0, 1)); ?>
-                    </div>
+                    <div class="profile-pic default"><?php echo strtoupper(substr($_SESSION['name'], 0, 1)); ?></div>
                 <?php endif; ?>
                 <div class="user-info">
                     <h4><?php echo htmlspecialchars($_SESSION['name']); ?></h4>
                     <p><?php echo htmlspecialchars($_SESSION['email']); ?></p>
-                    <span style="font-size: 11px; background: #e0e7ff; color: #4f46e5; padding: 2px 8px; border-radius: 12px;">
-                        STUDENT
-                    </span>
+                    <span class="user-tag">STUDENT</span>
                 </div>
             </div>
-            <!-- Navigation Menu -->
+
             <nav class="nav-menu">
-                <a href="dashboard.php" class="nav-link<?php echo basename($_SERVER['PHP_SELF']) == 'dashboard.php' ? ' active' : ''; ?>">
-                    <i class="fas fa-tachometer-alt"></i>
-                    <span>Dashboard</span>
-                </a>
-                <a href="goals.php" class="nav-link">
-                    <i class="fas fa-bullseye"></i>
-                    <span>My Goals</span>
-                    <?php if ($total_goals > 0): ?>
-                        <span class="badge"><?php echo $total_goals; ?></span>
-                    <?php endif; ?>
-                </a>
-                <a href="create_goal.php" class="nav-link active">
-                    <i class="fas fa-plus-circle"></i>
-                    <span>Create Goal</span>
-                </a>
-                <a href="achievements.php" class="nav-link">
-                    <i class="fas fa-trophy"></i>
-                    <span>Achievements</span>
-                    <?php if ($total_points > 0): ?>
-                        <span class="badge"><?php echo $total_points; ?> pts</span>
-                    <?php endif; ?>
-                </a>
-                <a href="notifications.php" class="nav-link">
-                    <i class="fas fa-inbox"></i>
-                    <span>Notifications</span>
-                    <?php if ($unread > 0): ?>
-                        <span class="badge"><?php echo $unread; ?></span>
-                    <?php endif; ?>
-                </a>
-                <a href="profile.php" class="nav-link">
-                    <i class="fas fa-user"></i>
-                    <span>Profile</span>
-                </a>
+                <a href="dashboard.php" class="nav-link"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
+                <a href="goals.php" class="nav-link"><i class="fas fa-bullseye"></i> My Goals <?php if ($total_goals > 0): ?><span class="badge"><?php echo $total_goals; ?></span><?php endif; ?></a>
+                <a href="create_goal.php" class="nav-link active"><i class="fas fa-plus-circle"></i> Create Goal</a>
+                <a href="achievements.php" class="nav-link"><i class="fas fa-trophy"></i> Achievements <?php if ($total_points > 0): ?><span class="badge"><?php echo $total_points; ?> pts</span><?php endif; ?></a>
+                <a href="notifications.php" class="nav-link"><i class="fas fa-inbox"></i> Notifications <?php if ($unread > 0): ?><span class="badge"><?php echo $unread; ?></span><?php endif; ?></a>
+                <a href="profile.php" class="nav-link"><i class="fas fa-user"></i> Profile</a>
             </nav>
-            <!-- Quick Stats -->
+
             <div class="sidebar-quick-stats">
                 <div class="sidebar-stat">
-                    <div class="sidebar-stat-icon">
-                        <i class="fas fa-bullseye"></i>
-                    </div>
-                    <div class="sidebar-stat-info">
-                        <div class="sidebar-stat-label">Goals</div>
-                        <div class="sidebar-stat-number"><?php echo $completed_goals; ?>/<?php echo $total_goals; ?></div>
-                    </div>
+                    <div class="sidebar-stat-icon"><i class="fas fa-bullseye"></i></div>
+                    <div><div class="sidebar-stat-label">Goals</div><div class="sidebar-stat-number"><?php echo $completed_goals; ?>/<?php echo $total_goals; ?></div></div>
                 </div>
                 <div class="sidebar-stat">
-                    <div class="sidebar-stat-icon">
-                        <i class="fas fa-star"></i>
-                    </div>
-                    <div class="sidebar-stat-info">
-                        <div class="sidebar-stat-label">Points</div>
-                        <div class="sidebar-stat-number"><?php echo $total_points; ?></div>
-                    </div>
+                    <div class="sidebar-stat-icon"><i class="fas fa-star"></i></div>
+                    <div><div class="sidebar-stat-label">Points</div><div class="sidebar-stat-number"><?php echo $total_points; ?></div></div>
                 </div>
                 <div class="sidebar-stat">
-                    <div class="sidebar-stat-icon">
-                        <i class="fas fa-fire"></i>
-                    </div>
-                    <div class="sidebar-stat-info">
-                        <div class="sidebar-stat-label">Streak</div>
-                        <div class="sidebar-stat-number"><?php echo $streak; ?> days</div>
-                    </div>
+                    <div class="sidebar-stat-icon"><i class="fas fa-fire"></i></div>
+                    <div><div class="sidebar-stat-label">Streak</div><div class="sidebar-stat-number"><?php echo $streak; ?> days</div></div>
                 </div>
             </div>
-            <!-- Logout -->
+
             <div class="sidebar-footer">
-                <a href="../logout.php" class="logout-btn">
-                    <i class="fas fa-sign-out-alt"></i>
-                    <span>Logout</span>
-                </a>
+                <a href="../logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
             </div>
         </aside>
-        
-        <!-- ===== MAIN CONTENT ===== -->
+
+        <!-- MAIN CONTENT -->
         <main class="main-content">
-            <!-- Page Header -->
             <header class="page-header">
                 <div class="header-content">
                     <h1>Create New Goal</h1>
                     <p>Set a new goal and start tracking your progress</p>
                 </div>
-                <a href="goals.php" class="btn btn-outline">
+                <a href="goals.php" class="back-btn">
                     <i class="fas fa-arrow-left"></i> Back to Goals
                 </a>
             </header>
-            
-            <!-- Alerts -->
+
             <?php if ($success): ?>
                 <div class="alert alert-success">
                     <i class="fas fa-check-circle"></i>
@@ -1039,7 +982,7 @@ img {
                     <span><?php echo htmlspecialchars($error); ?></span>
                 </div>
             <?php endif; ?>
-            
+
             <!-- Goal Creation Form -->
             <div class="form-container">
                 <form method="POST" id="createGoalForm">
@@ -1049,32 +992,35 @@ img {
                         
                         <div class="form-group">
                             <label for="title" class="required">Goal Title</label>
-                            <div class="input-with-icon">
-                                <i class="fas fa-bullseye input-icon"></i>
-                                <input type="text" id="title" name="title" 
-                                       placeholder="What do you want to achieve?" 
-                                       value="<?php echo htmlspecialchars($form_data['title']); ?>" 
-                                       required>
-                            </div>
+                            <input type="text" id="title" name="title" 
+                                   placeholder="What do you want to achieve?" 
+                                   value="<?php echo htmlspecialchars($form_data['title']); ?>" 
+                                   required maxlength="200">
                             <div class="form-help">Be specific about what you want to accomplish</div>
                         </div>
                         
                         <div class="form-group">
                             <label for="description">Description</label>
                             <textarea id="description" name="description" 
-                                      placeholder="Describe your goal in detail..."><?php echo htmlspecialchars($form_data['description']); ?></textarea>
+                                      placeholder="Describe your goal in detail... What steps will you take? Why is this important to you?"><?php echo htmlspecialchars($form_data['description']); ?></textarea>
                             <div class="form-help">Optional: Add details, reasons, or steps to achieve this goal</div>
                         </div>
                         
                         <div class="form-group">
                             <label for="category">Category</label>
                             <input type="text" id="category" name="category" 
-                                   placeholder="e.g., Health, Education, Career, Personal"
-                                   value="<?php echo htmlspecialchars($form_data['category']); ?>">
-                            <?php if (!empty($categories)): ?>
-                                <div class="form-help">Your previous categories:</div>
+                                   placeholder="e.g., Health, Education, Career, Personal, Fitness"
+                                   value="<?php echo htmlspecialchars($form_data['category']); ?>"
+                                   list="categorySuggestions">
+                            <datalist id="categorySuggestions">
+                                <?php foreach ($all_categories as $cat): ?>
+                                    <option value="<?php echo htmlspecialchars($cat); ?>">
+                                <?php endforeach; ?>
+                            </datalist>
+                            <?php if (!empty($all_categories)): ?>
+                                <div class="form-help">Suggestions: Click to select</div>
                                 <div class="category-suggestions">
-                                    <?php foreach ($categories as $cat): ?>
+                                    <?php foreach (array_slice($all_categories, 0, 8) as $cat): ?>
                                         <span class="category-tag" onclick="document.getElementById('category').value = '<?php echo htmlspecialchars($cat); ?>'">
                                             <?php echo htmlspecialchars($cat); ?>
                                         </span>
@@ -1093,27 +1039,46 @@ img {
                                 <label for="target_value" class="required">Target Value</label>
                                 <input type="number" id="target_value" name="target_value" 
                                        min="0.01" step="0.01" 
-                                       placeholder="e.g., 100"
+                                       placeholder="e.g., 100, 5.5, 30"
                                        value="<?php echo htmlspecialchars($form_data['target_value']); ?>"
                                        required>
+                                <div class="form-help">The numerical target you want to achieve</div>
                             </div>
                             
                             <div class="form-group">
                                 <label for="unit" class="required">Unit</label>
                                 <input type="text" id="unit" name="unit" 
-                                       placeholder="e.g., pages, kilometers, hours"
+                                       placeholder="e.g., pages, kilometers, hours, kg, chapters"
                                        value="<?php echo htmlspecialchars($form_data['unit']); ?>"
                                        required>
-                                <div class="unit-examples">Examples: pages (for books), kg (for weight), hours (for study)</div>
+                                <div class="unit-examples">Examples: pages (books), km (distance), hours (study), kg (weight), chapters (learning)</div>
                             </div>
                         </div>
                         
                         <div class="form-row">
                             <div class="form-group">
+                                <label for="start_date">Start Date</label>
+                                <input type="date" id="start_date" name="start_date" 
+                                       value="<?php echo htmlspecialchars($form_data['start_date'] ?? date('Y-m-d')); ?>">
+                                <div class="form-help">When you plan to start working on this goal</div>
+                            </div>
+                            
+                            <div class="form-group">
                                 <label for="due_date">Due Date</label>
                                 <input type="date" id="due_date" name="due_date" 
                                        value="<?php echo htmlspecialchars($form_data['due_date']); ?>">
                                 <div class="form-help">Optional: Set a deadline for your goal</div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="estimated_hours">Estimated Hours</label>
+                                <input type="number" id="estimated_hours" name="estimated_hours" 
+                                       min="0.5" step="0.5"
+                                       placeholder="e.g., 10.5, 20, 5"
+                                       value="<?php echo htmlspecialchars($form_data['estimated_hours']); ?>">
+                                <div class="form-help">Optional: Estimated time needed to complete</div>
                             </div>
                             
                             <div class="form-group">
@@ -1161,69 +1126,74 @@ img {
             </div>
             
             <!-- Tips Section -->
-            <div style="background: white; border-radius: 12px; padding: 20px; margin-top: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.05);">
-                <h3 style="margin-bottom: 15px; color: #111827; display: flex; align-items: center; gap: 10px;">
-                    <i class="fas fa-lightbulb" style="color: #f59e0b;"></i>
+            <div class="tips-section">
+                <h3 style="margin-bottom: 1.5rem; color: var(--dark); display: flex; align-items: center; gap: 10px;">
+                    <i class="fas fa-lightbulb" style="color: var(--warning);"></i>
                     Tips for Setting Effective Goals
                 </h3>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px;">
-                    <div style="background: #f9fafb; padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: 500; color: #111827; margin-bottom: 5px;">Be Specific</div>
-                        <div style="font-size: 13px; color: #6b7280;">Clearly define what you want to achieve</div>
+                <div class="tips-grid">
+                    <div class="tip-card">
+                        <i class="fas fa-bullseye"></i>
+                        <h4>Be Specific</h4>
+                        <p>Clearly define what you want to achieve. Instead of "Exercise more," try "Exercise 30 minutes daily."</p>
                     </div>
-                    <div style="background: #f9fafb; padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: 500; color: #111827; margin-bottom: 5px;">Make it Measurable</div>
-                        <div style="font-size: 13px; color: #6b7280;">Use numbers to track your progress</div>
+                    <div class="tip-card">
+                        <i class="fas fa-ruler"></i>
+                        <h4>Make it Measurable</h4>
+                        <p>Use numbers to track progress. "Read 10 books" is better than "Read more books."</p>
                     </div>
-                    <div style="background: #f9fafb; padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: 500; color: #111827; margin-bottom: 5px;">Set a Deadline</div>
-                        <div style="font-size: 13px; color: #6b7280;">Deadlines create urgency and focus</div>
+                    <div class="tip-card">
+                        <i class="fas fa-calendar-check"></i>
+                        <h4>Set a Deadline</h4>
+                        <p>Deadlines create urgency and help you stay focused on completion.</p>
                     </div>
-                    <div style="background: #f9fafb; padding: 15px; border-radius: 8px;">
-                        <div style="font-weight: 500; color: #111827; margin-bottom: 5px;">Track Regularly</div>
-                        <div style="font-size: 13px; color: #6b7280;">Update your progress frequently</div>
+                    <div class="tip-card">
+                        <i class="fas fa-chart-line"></i>
+                        <h4>Track Regularly</h4>
+                        <p>Update your progress frequently to stay motivated and make adjustments.</p>
                     </div>
                 </div>
             </div>
         </main>
     </div>
-    
-    <!-- ===== JAVASCRIPT ===== -->
+
     <script>
-        // Mobile sidebar toggle
-        const sidebarToggle = document.getElementById('sidebarToggle');
+        // Mobile sidebar
         const sidebar = document.getElementById('sidebar');
+        const sidebarToggle = document.getElementById('sidebarToggle');
         const sidebarClose = document.getElementById('sidebarClose');
-        
-        if (sidebarToggle) {
-            sidebarToggle.addEventListener('click', function() {
-                sidebar.classList.add('active');
-            });
+        const overlay = document.getElementById('sidebarOverlay');
+
+        function openSidebar() { 
+            sidebar.classList.add('active'); 
+            overlay.classList.add('active'); 
         }
-        
-        if (sidebarClose) {
-            sidebarClose.addEventListener('click', function() {
-                sidebar.classList.remove('active');
-            });
+        function closeSidebar() { 
+            sidebar.classList.remove('active'); 
+            overlay.classList.remove('active'); 
         }
-        
+
+        sidebarToggle?.addEventListener('click', openSidebar);
+        sidebarClose?.addEventListener('click', closeSidebar);
+        overlay?.addEventListener('click', closeSidebar);
+
         // Close sidebar when clicking outside on mobile
         document.addEventListener('click', function(event) {
             if (window.innerWidth <= 768 && 
                 sidebar && sidebar.classList.contains('active') &&
                 !sidebar.contains(event.target) && 
                 !sidebarToggle.contains(event.target)) {
-                sidebar.classList.remove('active');
+                closeSidebar();
             }
         });
-        
+
         // Handle window resize
         window.addEventListener('resize', function() {
             if (window.innerWidth > 768 && sidebar && sidebar.classList.contains('active')) {
-                sidebar.classList.remove('active');
+                closeSidebar();
             }
         });
-        
+
         // Priority selection
         document.querySelectorAll('.priority-option').forEach(option => {
             option.addEventListener('click', function() {
@@ -1239,56 +1209,103 @@ img {
                 document.getElementById('priority').value = this.dataset.value;
             });
         });
-        
+
         // Form validation
         document.getElementById('createGoalForm').addEventListener('submit', function(e) {
             const title = document.getElementById('title').value.trim();
             const targetValue = document.getElementById('target_value').value;
             const unit = document.getElementById('unit').value.trim();
+            const startDate = document.getElementById('start_date').value;
+            const dueDate = document.getElementById('due_date').value;
+            const estimatedHours = document.getElementById('estimated_hours').value;
+            
+            // Clear previous errors
+            document.querySelectorAll('.error-message').forEach(el => el.remove());
+            
+            let hasError = false;
             
             if (!title) {
-                e.preventDefault();
-                alert('Please enter a goal title.');
-                document.getElementById('title').focus();
-                return false;
+                showError('title', 'Please enter a goal title.');
+                hasError = true;
+            } else if (title.length < 3) {
+                showError('title', 'Title must be at least 3 characters.');
+                hasError = true;
             }
             
             if (!targetValue || parseFloat(targetValue) <= 0) {
-                e.preventDefault();
-                alert('Target value must be greater than 0.');
-                document.getElementById('target_value').focus();
-                return false;
+                showError('target_value', 'Target value must be greater than 0.');
+                hasError = true;
             }
             
             if (!unit) {
-                e.preventDefault();
-                alert('Please specify the unit (e.g., pages, kilometers, hours).');
-                document.getElementById('unit').focus();
-                return false;
+                showError('unit', 'Please specify the unit (e.g., pages, kilometers, hours).');
+                hasError = true;
             }
             
-            // Set minimum due date to today
-            const dueDate = document.getElementById('due_date').value;
             if (dueDate) {
                 const today = new Date().toISOString().split('T')[0];
                 if (dueDate < today) {
-                    e.preventDefault();
-                    alert('Due date cannot be in the past.');
-                    document.getElementById('due_date').focus();
-                    return false;
+                    showError('due_date', 'Due date cannot be in the past.');
+                    hasError = true;
                 }
+            }
+            
+            if (startDate && dueDate && startDate > dueDate) {
+                showError('start_date', 'Start date cannot be after due date.');
+                hasError = true;
+            }
+            
+            if (estimatedHours && parseFloat(estimatedHours) <= 0) {
+                showError('estimated_hours', 'Estimated hours must be greater than 0.');
+                hasError = true;
+            }
+            
+            if (hasError) {
+                e.preventDefault();
+                return false;
             }
             
             return true;
         });
-        
+
+        function showError(fieldId, message) {
+            const field = document.getElementById(fieldId);
+            const error = document.createElement('div');
+            error.className = 'error-message';
+            error.style.color = 'var(--danger)';
+            error.style.fontSize = '0.85rem';
+            error.style.marginTop = '0.5rem';
+            error.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${message}`;
+            
+            if (field.parentNode.querySelector('.error-message')) {
+                field.parentNode.querySelector('.error-message').remove();
+            }
+            
+            field.parentNode.appendChild(error);
+            field.style.borderColor = 'var(--danger)';
+            
+            // Auto-remove error when user starts typing
+            field.addEventListener('input', function() {
+                if (this.parentNode.querySelector('.error-message')) {
+                    this.parentNode.querySelector('.error-message').remove();
+                    this.style.borderColor = '';
+                }
+            }, { once: true });
+        }
+
         // Auto-focus on title input
         document.getElementById('title').focus();
         
-        // Set minimum date for due date input
+        // Set minimum dates
         const today = new Date().toISOString().split('T')[0];
+        document.getElementById('start_date').min = today;
         document.getElementById('due_date').min = today;
         
+        // Set default start date to today
+        if (!document.getElementById('start_date').value) {
+            document.getElementById('start_date').value = today;
+        }
+
         // Character counter for description
         const descriptionTextarea = document.getElementById('description');
         if (descriptionTextarea) {
@@ -1300,27 +1317,54 @@ img {
             
             function updateCharCount() {
                 const length = descriptionTextarea.value.length;
-                charCount.textContent = `${length}/500 characters`;
+                charCount.textContent = `${length}/1000 characters`;
                 
-                if (length > 500) {
-                    charCount.style.color = '#ef4444';
-                } else if (length > 400) {
-                    charCount.style.color = '#f59e0b';
+                if (length > 1000) {
+                    charCount.style.color = 'var(--danger)';
+                } else if (length > 800) {
+                    charCount.style.color = 'var(--warning)';
                 } else {
-                    charCount.style.color = '#6b7280';
+                    charCount.style.color = 'var(--gray-dark)';
                 }
             }
             
             descriptionTextarea.addEventListener('input', updateCharCount);
-            updateCharCount(); // Initial count
+            updateCharCount();
         }
-        
+
         // Clear form confirmation
         document.querySelector('button[type="reset"]').addEventListener('click', function(e) {
             if (!confirm('Are you sure you want to clear all form fields?')) {
                 e.preventDefault();
+            } else {
+                // Reset priority selection
+                document.querySelectorAll('.priority-option').forEach(opt => {
+                    opt.classList.remove('selected');
+                });
+                document.querySelector('.priority-option.medium').classList.add('selected');
+                document.getElementById('priority').value = 'medium';
+                
+                // Reset dates to today
+                document.getElementById('start_date').value = today;
+                document.getElementById('due_date').value = '';
             }
         });
+
+        // Auto-suggest categories when typing
+        const categoryInput = document.getElementById('category');
+        if (categoryInput) {
+            categoryInput.addEventListener('input', function() {
+                const value = this.value.toLowerCase();
+                const suggestions = document.querySelectorAll('.category-tag');
+                suggestions.forEach(tag => {
+                    if (tag.textContent.toLowerCase().includes(value) || value === '') {
+                        tag.style.display = 'inline-block';
+                    } else {
+                        tag.style.display = 'none';
+                    }
+                });
+            });
+        }
     </script>
 </body>
 </html>

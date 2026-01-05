@@ -1,68 +1,5 @@
 <?php
-session_start();
-require_once '../includes/db_connection.php';
-checkAuth('student');
-
-$student_id = $_SESSION['user_id'];
-$success = $_SESSION['success'] ?? '';
-$error = $_SESSION['error'] ?? '';
-unset($_SESSION['success'], $_SESSION['error']);
-
-// === Fetch Stats for Sidebar ===
-$total_goals = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ?");
-$total_goals->execute([$student_id]);
-$total_goals = $total_goals->fetchColumn();
-
-$completed_goals = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ? AND status = 'completed'");
-$completed_goals->execute([$student_id]);
-$completed_goals = $completed_goals->fetchColumn();
-
-$total_points = $pdo->prepare("SELECT points FROM users WHERE id = ?");
-$total_points->execute([$student_id]);
-$total_points = $total_points->fetchColumn() ?: 0;
-
-$streak = $pdo->prepare("SELECT current_streak FROM users WHERE id = ?");
-$streak->execute([$student_id]);
-$streak = $streak->fetchColumn() ?: 0;
-
-$unread = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0");
-$unread->execute([$student_id]);
-$unread = $unread->fetchColumn();
-
-// === DELETE GOAL ===
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_goal'])) {
-    $goal_id = $_POST['goal_id'];
-    
-    // Verify ownership
-    $check = $pdo->prepare("SELECT id FROM student_goals WHERE id = ? AND student_id = ?");
-    $check->execute([$goal_id, $student_id]);
-    
-    if ($check->fetch()) {
-        try {
-            $pdo->beginTransaction();
-            
-            // Delete related records first (due to foreign keys)
-            $pdo->prepare("DELETE FROM goal_progress WHERE goal_id = ?")->execute([$goal_id]);
-            $pdo->prepare("DELETE FROM progress_history WHERE goal_id = ?")->execute([$goal_id]);
-            $pdo->prepare("DELETE FROM reminders WHERE goal_id = ?")->execute([$goal_id]);
-            
-            // Delete the goal
-            $stmt = $pdo->prepare("DELETE FROM student_goals WHERE id = ? AND student_id = ?");
-            $stmt->execute([$goal_id, $student_id]);
-            
-            $pdo->commit();
-            $_SESSION['success'] = "Goal deleted successfully!";
-        } catch (Exception $e) {
-            $pdo->rollBack();
-            $_SESSION['error'] = "Failed to delete goal: " . $e->getMessage();
-        }
-    } else {
-        $_SESSION['error'] = "Goal not found or you don't have permission to delete it.";
-    }
-    
-    header("Location: goals.php");
-    exit;
-}
+// students/goals.php - Updated section
 
 // === UPDATE PROGRESS ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_progress'])) {
@@ -82,72 +19,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_progress'])) {
             $percentage = 0;
         }
         
-        $status = $percentage >= 100 ? 'completed' : 'in_progress';
+        $old_status = $goal['status'];
+        $new_status = $percentage >= 100 ? 'completed' : 'in_progress';
 
-        $stmt = $pdo->prepare("UPDATE student_goals SET current_value=?, progress_percentage=?, status=?, updated_at=NOW() WHERE id=? AND student_id=?");
-        $stmt->execute([$new_val, $percentage, $status, $goal_id, $student_id]);
+        $stmt = $pdo->prepare("
+            UPDATE student_goals 
+            SET current_value=?, progress_percentage=?, status=?, updated_at=NOW() 
+            WHERE id=? AND student_id=?
+        ");
+        $stmt->execute([$new_val, $percentage, $new_status, $goal_id, $student_id]);
 
         // Add progress history
-        $hist = $pdo->prepare("INSERT INTO progress_history (student_id, goal_id, progress_added, notes) VALUES (?, ?, ?, ?)");
+        $hist = $pdo->prepare("
+            INSERT INTO progress_history (student_id, goal_id, progress_added, notes) 
+            VALUES (?, ?, ?, ?)
+        ");
         $hist->execute([$student_id, $goal_id, $progress, $_POST['notes'] ?? '']);
 
-        $_SESSION['success'] = "Progress updated!";
+        // Check if goal was just completed
+        if ($old_status !== 'completed' && $new_status === 'completed') {
+            // Set completion date
+            $pdo->prepare("
+                UPDATE student_goals 
+                SET completed_at = NOW() 
+                WHERE id = ? AND student_id = ?
+            ")->execute([$goal_id, $student_id]);
+            
+            // Award achievements
+            require_once '../includes/functions.php';
+            $achievements_awarded = awardAchievements($pdo, $student_id);
+            
+            if ($achievements_awarded > 0) {
+                $_SESSION['success'] = "Progress updated! 🎉 You earned $achievements_awarded new achievement(s)!";
+            } else {
+                $_SESSION['success'] = "Progress updated! Goal completed!";
+            }
+        } else {
+            $_SESSION['success'] = "Progress updated!";
+        }
+        
         header("Location: goals.php");
         exit;
     }
 }
-
-// === EDIT GOAL ===
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['edit_goal'])) {
-    $goal_id = $_POST['goal_id'];
-    $title = $_POST['title'] ?? '';
-    $description = $_POST['description'] ?? '';
-    $category = $_POST['category'] ?? '';
-    $priority = $_POST['priority'] ?? 'medium';
-    $due_date = $_POST['due_date'] ?? '';
-    $target_value = $_POST['target_value'] ?? 0;
-    $unit = $_POST['unit'] ?? '';
-
-    // Verify ownership
-    $check = $pdo->prepare("SELECT id FROM student_goals WHERE id = ? AND student_id = ?");
-    $check->execute([$goal_id, $student_id]);
-    
-    if ($check->fetch()) {
-        // If target value changed, recalculate progress percentage
-        $goal = $pdo->prepare("SELECT current_value FROM student_goals WHERE id = ?");
-        $goal->execute([$goal_id]);
-        $goal = $goal->fetch();
-        
-        if ($target_value > 0) {
-            $percentage = ($goal['current_value'] / $target_value) * 100;
-        } else {
-            $percentage = 0;
-        }
-        
-        $stmt = $pdo->prepare("UPDATE student_goals SET title=?, description=?, category=?, priority=?, due_date=?, target_value=?, unit=?, progress_percentage=?, updated_at=NOW() WHERE id=? AND student_id=?");
-        
-        if ($stmt->execute([$title, $description, $category, $priority, $due_date, $target_value, $unit, $percentage, $goal_id, $student_id])) {
-            $_SESSION['success'] = "Goal updated successfully!";
-        } else {
-            $_SESSION['error'] = "Failed to update goal.";
-        }
-    } else {
-        $_SESSION['error'] = "Goal not found or you don't have permission to edit it.";
-    }
-    
-    header("Location: goals.php");
-    exit;
-}
-
-// Fetch all goals
-$goals = $pdo->prepare("SELECT * FROM student_goals WHERE student_id=? ORDER BY status='overdue', priority DESC, due_date ASC");
-$goals->execute([$student_id]);
-$goals = $goals->fetchAll();
-
-// Fetch available categories for edit form
-$categories = $pdo->query("SELECT DISTINCT category FROM student_goals WHERE category IS NOT NULL AND student_id = $student_id UNION SELECT name FROM categories WHERE is_global = 1 OR created_by = $student_id")->fetchAll(PDO::FETCH_COLUMN);
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>

@@ -27,17 +27,7 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Helper functions
-function getStat($pdo, $query, $params = [], $default = 0) {
-    try {
-        $stmt = $pdo->prepare($query);
-        $stmt->execute($params);
-        $result = $stmt->fetchColumn();
-        return $result !== false ? $result : $default;
-    } catch (Exception $e) {
-        return $default;
-    }
-}
+
 
 function checkAuth($required_role = null) {
     if (!isset($_SESSION['user_id'])) {
@@ -194,20 +184,6 @@ function distributeAchievementToAllStudents($pdo, $achievement_id) {
     }
 }
 
-function awardAchievements($pdo) {
-    try {
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'student' AND status = 'active' AND is_deleted = 0");
-        $stmt->execute();
-        $students = $stmt->fetchAll(PDO::FETCH_COLUMN);
-        
-        foreach ($students as $student_id) {
-            awardAchievementsForStudent($pdo, $student_id);
-        }
-    } catch (Exception $e) {
-        error_log("awardAchievements error: " . $e->getMessage());
-    }
-}
-
 // Function to award achievements for a specific student
 function awardAchievementsForStudent($pdo, $student_id) {
     try {
@@ -259,13 +235,6 @@ function awardAchievementsForStudent($pdo, $student_id) {
     }
 }
 
-// Notification for achievement
-function createAchievementNotification($pdo, $student_id, $achievement) {
-    $title = $achievement['title'];
-    $message = "Congratulations! You've unlocked the '$title' achievement!";
-    $notif_stmt = $pdo->prepare("INSERT INTO notifications (user_id, title, message, type) VALUES (?, 'Achievement Unlocked', ?, 'achievement')");
-    $notif_stmt->execute([$student_id, $message]);
-}
 
 //new fields if not exist
 try {
