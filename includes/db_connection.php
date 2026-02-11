@@ -1,10 +1,13 @@
 <?php
-// Database configuration
-define('DB_HOST', '127.0.0.1');
-define('DB_PORT', '3307');
-define('DB_NAME', 'progressmate_now');
-define('DB_USER', 'root');
-define('DB_PASS', '');
+// Load shared helper functions
+require_once __DIR__ . '/functions.php';
+
+// Database configuration (supports environment overrides)
+define('DB_HOST', getenv('DB_HOST') ?: '127.0.0.1');
+define('DB_PORT', getenv('DB_PORT') ?: '3307');
+define('DB_NAME', getenv('DB_NAME') ?: 'progressmate_now');
+define('DB_USER', getenv('DB_USER') ?: 'root');
+define('DB_PASS', getenv('DB_PASS') !== false ? getenv('DB_PASS') : '');
 
 // Create connection
 try {
@@ -19,7 +22,7 @@ try {
         ]
     );
 } catch (PDOException $e) {
-    die("Database connection failed: " . $e->getMessage());
+    die("Database connection failed. Please check your DB settings.");
 }
 
 // Start session if not already started
@@ -142,7 +145,10 @@ function computeAchievementProgress($pdo, $student_id, $achievement) {
 function distributeAchievementToAllStudents($pdo, $achievement_id) {
     try {
         // Get all active students
-       $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'student' AND status = 'active' AND deleted_at IS NULL");
+
+        $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'student' AND status = 'active' AND deleted_at IS NULL");
+
+
 
         $stmt->execute();
         $students = $stmt->fetchAll();
@@ -262,7 +268,7 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS progress_history (
     id INT AUTO_INCREMENT PRIMARY KEY,
     student_id INT,
     goal_id INT,
-    log_date DATE,
+    log_date DATE DEFAULT (CURRENT_DATE),
     progress_added FLOAT,
     notes TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
