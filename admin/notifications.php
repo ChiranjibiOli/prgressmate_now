@@ -914,6 +914,7 @@ unset($n);
                     <i class="fas fa-bell"></i>
                     <span>Notifications</span>
                 </a>
+                <a href="categories.php" class="nav-link active"><i class="fas fa-tags"></i> Categories</a>
                 <a href="settings.php" class="nav-link">
                     <i class="fas fa-cog"></i>
                     <span>Settings</span>
