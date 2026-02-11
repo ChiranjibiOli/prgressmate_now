@@ -1,16 +1,29 @@
 <?php
 // students/goals.php - Updated section
 
+session_start();
+require_once '../includes/db_connection.php';
+checkAuth('student');
+
+$student_id = $_SESSION['user_id'];
+
 // === UPDATE PROGRESS ===
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_progress'])) {
-    $goal_id = $_POST['goal_id'];
+    $goal_id = (int)($_POST['goal_id'] ?? 0);
     $progress = floatval($_POST['progress_value'] ?? 0);
+
+    if ($goal_id <= 0 || $progress <= 0) {
+        $_SESSION['error'] = 'Please enter valid progress for a valid goal.';
+        header("Location: goals.php");
+        exit;
+    }
 
     $goal = $pdo->prepare("SELECT * FROM student_goals WHERE id=? AND student_id=?");
     $goal->execute([$goal_id, $student_id]);
     $goal = $goal->fetch();
 
     if ($goal) {
+        try {
         $new_val = min($goal['current_value'] + $progress, $goal['target_value']);
         
         if ((float)$goal['target_value'] > 0) {
@@ -22,6 +35,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_progress'])) {
         $old_status = $goal['status'];
         $new_status = $percentage >= 100 ? 'completed' : 'in_progress';
 
+        $pdo->beginTransaction();
+
         $stmt = $pdo->prepare("
             UPDATE student_goals 
             SET current_value=?, progress_percentage=?, status=?, updated_at=NOW() 
@@ -31,10 +46,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_progress'])) {
 
         // Add progress history
         $hist = $pdo->prepare("
-            INSERT INTO progress_history (student_id, goal_id, progress_added, notes) 
-            VALUES (?, ?, ?, ?)
+            INSERT INTO progress_history (student_id, goal_id, log_date, progress_added, notes) 
+            VALUES (?, ?, CURDATE(), ?, ?)
         ");
-        $hist->execute([$student_id, $goal_id, $progress, $_POST['notes'] ?? '']);
+        $hist->execute([$student_id, $goal_id, $progress, trim($_POST['notes'] ?? '')]);
 
         // Check if goal was just completed
         if ($old_status !== 'completed' && $new_status === 'completed') {
@@ -57,9 +72,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_progress'])) {
         } else {
             $_SESSION['success'] = "Progress updated!";
         }
-        
+
+        $pdo->commit();
         header("Location: goals.php");
         exit;
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            $_SESSION['error'] = 'Unable to update progress right now.';
+            header("Location: goals.php");
+            exit;
+        }
     }
 }
 ?>

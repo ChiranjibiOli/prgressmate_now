@@ -4,15 +4,15 @@
 /**
  * Get a single statistic value from database
  */
-function getStat($pdo, $query, $params = []) {
+function getStat($pdo, $query, $params = [], $default = 0) {
     try {
         $stmt = $pdo->prepare($query);
         $stmt->execute($params);
         $result = $stmt->fetchColumn();
-        return $result !== false ? (int)$result : 0;
+        return $result !== false ? (is_numeric($result) ? $result + 0 : $result) : $default;
     } catch (Exception $e) {
         error_log("getStat error: " . $e->getMessage());
-        return 0;
+        return $default;
     }
 }
 

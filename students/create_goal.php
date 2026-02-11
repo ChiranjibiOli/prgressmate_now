@@ -41,7 +41,9 @@ $cat_stmt->execute([$student_id]);
 $categories = $cat_stmt->fetchAll(PDO::FETCH_COLUMN);
 
 // Also fetch system categories
-$system_categories = $pdo->query("SELECT name FROM categories WHERE (is_global = 1 OR created_by = $student_id) AND deleted_at IS NULL ORDER BY name")->fetchAll(PDO::FETCH_COLUMN);
+$system_stmt = $pdo->prepare("SELECT name FROM categories WHERE (is_global = 1 OR created_by = ?) AND deleted_at IS NULL ORDER BY name");
+$system_stmt->execute([$student_id]);
+$system_categories = $system_stmt->fetchAll(PDO::FETCH_COLUMN);
 $all_categories = array_unique(array_merge($categories, $system_categories));
 
 // === Preserve Form Data on Error ===
