@@ -695,6 +695,7 @@ $total_pages_personal = ceil($total_personal_count / $per_page);
                 <a href="achievements.php" class="nav-link"><i class="fas fa-trophy"></i> Achievements <?php if ($stats['points'] > 0): ?><span class="badge"><?php echo $stats['points']; ?> pts</span><?php endif; ?></a>
                 <a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a>
                 <a href="notifications.php" class="nav-link"><i class="fas fa-bell"></i> Notifications</a>
+                <a href="categories.php" class="nav-link active"><i class="fas fa-tags"></i> Categories</a>
                 <a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> Settings</a>
             </nav>
 

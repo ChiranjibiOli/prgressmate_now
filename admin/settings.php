@@ -1,5 +1,7 @@
 <?php
 require_once '../includes/db_connection.php';
+require_once '../includes/functions.php';
+
 checkAuth('admin');
 
 $success = $_SESSION['success'] ?? '';
@@ -964,6 +966,7 @@ $sidebar_stats = [
                     <i class="fas fa-bell"></i>
                     <span>Notifications</span>
                 </a>
+                <a href="categories.php" class="nav-link active"><i class="fas fa-tags"></i> Categories</a>
                 <a href="settings.php" class="nav-link active">
                     <i class="fas fa-cog"></i>
                     <span>Settings</span>

@@ -335,6 +335,7 @@ $email = $_SESSION['email'] ?? 'admin@progressmate.com';
                 <a href="assign_goals.php" class="nav-link"><i class="fas fa-tasks"></i> Assign Goals <span class="badge"><?php echo $sidebar_stats['assigned']; ?></span></a>
                 <a href="achievements.php" class="nav-link"><i class="fas fa-trophy"></i> Achievements <span class="badge"><?php echo $sidebar_stats['points']; ?> pts</span></a>
                 <a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a>
+                <a href="notifications.php" class="nav-link"><i class="fas fa-bell"></i> Notifications</a>
                 <a href="categories.php" class="nav-link"><i class="fas fa-tags"></i> Categories</a>
                 <a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> Settings</a>
             </nav>

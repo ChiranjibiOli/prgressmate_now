@@ -35,10 +35,21 @@ function awardAchievements($pdo, $student_id) {
                 u.current_streak,
                 (SELECT COUNT(*) FROM student_goals WHERE student_id = u.id AND status = 'completed' AND deleted_at IS NULL) as completed_goals,
                 (SELECT COUNT(*) FROM student_goals WHERE student_id = u.id AND is_self_created = 1 AND deleted_at IS NULL) as self_created_goals,
-                (SELECT COUNT(*) FROM student_goals WHERE student_id = u.id AND status = 'active' AND deleted_at IS NULL) as active_goals,
-                (SELECT COUNT(*) FROM student_goals WHERE student_id = u.id AND status = 'overdue' AND deleted_at IS NULL) as overdue_goals
+(SELECT COUNT(*) FROM student_goals 
+ WHERE student_id = u.id 
+ AND status IN ('pending','in_progress') 
+ AND deleted_at IS NULL) as active_goals,
+
+(SELECT COUNT(*) FROM student_goals 
+ WHERE student_id = u.id 
+ AND status != 'completed' 
+ AND due_date IS NOT NULL 
+ AND due_date < CURDATE()
+ AND deleted_at IS NULL) as overdue_goals
+
+
             FROM users u 
-            WHERE u.id = ? AND u.role = 'student' AND u.status = 'active' AND u.deleted_at IS NULL
+            WHERE u.id = ? AND u.role = 'student' AND u.status IN ('pending','in_progress') AND u.deleted_at IS NULL
         ");
         $studentStats->execute([$student_id]);
         $stats = $studentStats->fetch(PDO::FETCH_ASSOC);
@@ -409,7 +420,11 @@ function getAchievementProgress($pdo, $student_id) {
             SELECT 
                 u.points,
                 u.current_streak,
-                (SELECT COUNT(*) FROM student_goals WHERE student_id = u.id AND status = 'completed') as completed_goals,
+                (SELECT COUNT(*) FROM student_goals 
+ WHERE student_id = u.id 
+ AND status IN ('pending','in_progress') 
+ AND deleted_at IS NULL) as active_goals,
+
                 (SELECT COUNT(*) FROM student_goals WHERE student_id = u.id AND is_self_created = 1) as self_created_goals
             FROM users u 
             WHERE u.id = ?

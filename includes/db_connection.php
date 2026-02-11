@@ -145,7 +145,11 @@ function computeAchievementProgress($pdo, $student_id, $achievement) {
 function distributeAchievementToAllStudents($pdo, $achievement_id) {
     try {
         // Get all active students
+
         $stmt = $pdo->prepare("SELECT id FROM users WHERE role = 'student' AND status = 'active' AND deleted_at IS NULL");
+
+
+
         $stmt->execute();
         $students = $stmt->fetchAll();
         

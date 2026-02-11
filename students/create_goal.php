@@ -40,10 +40,20 @@ $cat_stmt = $pdo->prepare("SELECT DISTINCT category FROM student_goals WHERE stu
 $cat_stmt->execute([$student_id]);
 $categories = $cat_stmt->fetchAll(PDO::FETCH_COLUMN);
 
-// Also fetch system categories
+
 $system_stmt = $pdo->prepare("SELECT name FROM categories WHERE (is_global = 1 OR created_by = ?) AND deleted_at IS NULL ORDER BY name");
 $system_stmt->execute([$student_id]);
 $system_categories = $system_stmt->fetchAll(PDO::FETCH_COLUMN);
+
+$sys_stmt = $pdo->prepare("
+    SELECT name
+    FROM categories
+    WHERE (is_global = 1 OR created_by = ?)
+      AND deleted_at IS NULL
+    ORDER BY name ASC
+");
+
+
 $all_categories = array_unique(array_merge($categories, $system_categories));
 
 // === Preserve Form Data on Error ===
@@ -66,7 +76,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $target_value = floatval($_POST['target_value'] ?? 0);
     $unit = trim($_POST['unit'] ?? '');
     $due_date = $_POST['due_date'] ?: null;
-    $priority = in_array($_POST['priority'] ?? 'medium', ['low','medium','high']) ? $_POST['priority'] : 'medium';
+    $allowedPriorities = ['low','medium','high','critical'];
+$priority = $_POST['priority'] ?? 'medium';
+if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
+
     $estimated_hours = !empty($_POST['estimated_hours']) ? floatval($_POST['estimated_hours']) : null;
     $start_date = $_POST['start_date'] ?: date('Y-m-d');
 

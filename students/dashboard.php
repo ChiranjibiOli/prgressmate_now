@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once '../includes/db_connection.php';
+require_once '../includes/functions.php';
 checkAuth('student');
 
 $student_id = $_SESSION['user_id'];
