@@ -1,7 +1,9 @@
 <?php
 session_start();
 require_once '../includes/db_connection.php';
+require_once '../includes/functions.php'; // ✅ REQUIRED for checkAuth()
 checkAuth('student');
+
 
 $student_id = $_SESSION['user_id'];
 
@@ -22,7 +24,8 @@ $streak = $pdo->prepare("SELECT current_streak FROM users WHERE id = ?");
 $streak->execute([$student_id]);
 $streak = $streak->fetchColumn() ?: 0;
 
-$unread = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0");
+$unread = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0 AND deleted_at IS NULL");
+
 $unread->execute([$student_id]);
 $unread = $unread->fetchColumn();
 
@@ -36,12 +39,14 @@ if (isset($_GET['read'])) {
     header("Location: notifications.php");
     exit;
 }
-
 if (isset($_GET['delete'])) {
     $id = (int)$_GET['delete'];
-    $stmt = $pdo->prepare("DELETE FROM notifications WHERE id = ? AND user_id = ?");
+    $stmt = $pdo->prepare("
+        UPDATE notifications 
+        SET deleted_at = NOW() 
+        WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+    ");
     $stmt->execute([$id, $student_id]);
-    $success = "Notification deleted.";
     header("Location: notifications.php");
     exit;
 }
@@ -51,7 +56,8 @@ $per_page = 20;
 $page = max(1, $_GET['page'] ?? 1);
 $offset = ($page - 1) * $per_page;
 
-$total_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ?");
+$total_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND deleted_at IS NULL");
+
 $total_stmt->execute([$student_id]);
 $total_notifications = $total_stmt->fetchColumn();
 $total_pages = ceil($total_notifications / $per_page);
@@ -64,709 +70,594 @@ $offset = ($page - 1) * $per_page;
 // === Fetch Notifications safely ===
 $stmt = $pdo->prepare("
     SELECT * FROM notifications 
-    WHERE user_id = ? 
+    WHERE user_id = ? AND deleted_at IS NULL
     ORDER BY created_at DESC 
     LIMIT $per_page OFFSET $offset
 ");
+
 $stmt->execute([$student_id]);
 $notifications = $stmt->fetchAll();
-
+$current = basename($_SERVER['PHP_SELF']);
 
 ?>
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Notifications - ProgressMate</title>
-       <link rel="stylesheet" href="../assets/css/style.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>
-       :root {
-    /* Primary Colors */
-    --primary: #4f46e5;
-    --primary-light: #eef2ff;
-    --primary-dark: #4338ca;
-    
-    /* Secondary Colors */
-    --secondary: #64748b;
-    --secondary-light: #f8fafc;
-    --secondary-dark: #475569;
-    
-    /* Status Colors */
-    --success: #10b981;
-    --success-light: #d1fae5;
-    --warning: #f59e0b;
-    --warning-light: #fef3c7;
-    --danger: #ef4444;
-    --danger-light: #fee2e2;
-    --info: #3b82f6;
-    --info-light: #dbeafe;
-    
-    /* Neutral Colors */
-    --dark: #1e293b;
-    --light: #f1f5f9;
-    --white: #ffffff;
-    --gray: #e2e8f0;
-    --gray-light: #f9fafb;
-    --gray-dark: #6b7280;
-    
-    /* Typography */
-    --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    --font-size-xs: 0.75rem;
-    --font-size-sm: 0.875rem;
-    --font-size-base: 1rem;
-    --font-size-lg: 1.125rem;
-    --font-size-xl: 1.25rem;
-    --font-size-2xl: 1.5rem;
-    --font-size-3xl: 1.875rem;
-    --font-size-4xl: 2.25rem;
-    
-    /* Spacing */
-    --spacing-xs: 0.25rem;
-    --spacing-sm: 0.5rem;
-    --spacing-md: 1rem;
-    --spacing-lg: 1.5rem;
-    --spacing-xl: 2rem;
-    --spacing-2xl: 3rem;
-    
-    /* Borders & Shadows */
-    --radius-sm: 0.375rem;
-    --radius-md: 0.5rem;
-    --radius-lg: 0.75rem;
-    --radius-xl: 1rem;
-    --radius-2xl: 1.5rem;
-    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-    --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-    
-    /* Transitions */
-    --transition-fast: 150ms ease;
-    --transition-base: 300ms ease;
-    --transition-slow: 500ms ease;
+    <link rel="stylesheet" href="../assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+:root{
+  --bg0:#070A18;
+  --bg1:#0B1030;
+
+  --text:#EAF0FF;
+  --muted: rgba(234,240,255,.65);
+  --muted2: rgba(234,240,255,.50);
+
+  --primary:#4F46E5;
+  --primary-dark:#4338ca;
+  --primary-light: rgba(79,70,229,.14);
+
+  --success:#34D399;
+  --warning:#FBBF24;
+  --danger:#FB7185;
+  --info:#22D3EE;
+
+  --border: rgba(255,255,255,.10);
+  --border2: rgba(255,255,255,.08);
+
+  --shadow: 0 18px 45px rgba(0,0,0,.35);
+  --shadow2: 0 10px 30px rgba(0,0,0,.22);
+
+  --r12: 12px;
+  --r14: 14px;
+  --r16: 16px;
+  --r20: 20px;
+
+  --transition-fast: 150ms ease;
+  --transition-base: 300ms ease;
 }
 
-/* ===== BASE RESET ===== */
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
+/* ===== Reset ===== */
+*{ margin:0; padding:0; box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  font-family:'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(900px 520px at 18% 10%, rgba(79,70,229,.22), transparent 60%),
+    radial-gradient(900px 520px at 88% 15%, rgba(34,211,238,.18), transparent 58%),
+    radial-gradient(900px 520px at 70% 95%, rgba(96,165,250,.14), transparent 62%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+  overflow-x:hidden;
+  line-height: 1.5;
+}
+a{ color: inherit; text-decoration:none; }
+img{ max-width:100%; display:block; }
+button{ font-family: inherit; cursor:pointer; border:none; background:none; }
+
+/* ===== Mobile Toggle ===== */
+.mobile-toggle{
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 2000;
+  width: 44px;
+  height: 44px;
+  display: none;
+  place-items: center;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(10,14,35,.60);
+  color: var(--text);
+  box-shadow: var(--shadow2);
+  backdrop-filter: blur(12px);
 }
 
-html {
-    font-size: 16px;
-    scroll-behavior: smooth;
+/* ===== Layout ===== */
+.dashboard-wrapper{
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  min-height: 100vh;
 }
 
-body {
-    font-family: var(--font-family);
-    background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
-    color: var(--dark);
-    min-height: 100vh;
-    line-height: 1.5;
-    overflow-x: hidden;
+/* ===== Sidebar ===== */
+.sidebar{
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  display:flex;
+  flex-direction: column;
+  padding: 18px 16px 16px;
+  background:
+    radial-gradient(700px 320px at 20% 0%, rgba(79,70,229,.18), transparent 60%),
+    radial-gradient(520px 300px at 100% 20%, rgba(34,211,238,.14), transparent 60%),
+    linear-gradient(180deg, rgba(10,14,35,.85), rgba(10,14,35,.62));
+  border-right: 1px solid rgba(255,255,255,.10);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 10px 50px rgba(0,0,0,.25);
+}
+.sidebar::before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  background: linear-gradient(120deg, rgba(79,70,229,.20), rgba(34,211,238,.14), rgba(96,165,250,.10));
+  opacity:.22;
+  filter: blur(26px);
+  pointer-events:none;
+  z-index:0;
+}
+.sidebar-header,.user-profile,.nav-menu,.sidebar-quick-stats,.sidebar-footer{ position:relative; z-index:2; }
+
+.sidebar-header{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  padding: 10px 10px 12px;
+}
+.logo{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  font-weight: 900;
+  letter-spacing: .2px;
+  font-size: 18px;
+}
+.logo i{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.70), rgba(34,211,238,.35));
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 14px 30px rgba(79,70,229,.18);
+}
+.sidebar-close{
+  display:none;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
 }
 
-a {
-    text-decoration: none;
-    color: inherit;
-    transition: color var(--transition-fast);
+/* profile */
+.user-profile{
+  display:flex;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: var(--r16);
+  border: 1px solid var(--border2);
+  background:
+    radial-gradient(140% 180% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: 0 12px 26px rgba(0,0,0,.18);
+}
+.profile-pic{
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: 0 10px 20px rgba(0,0,0,.22);
+}
+.profile-pic.default{
+  display:grid;
+  place-items:center;
+  font-weight: 950;
+  font-size: 18px;
+  color: var(--text);
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.55), rgba(79,70,229,.55));
+}
+.user-info h4{ margin: 2px 0 2px; font-size: 15px; font-weight: 900; }
+.user-info p{
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 210px;
 }
 
-button {
-    font-family: inherit;
-    cursor: pointer;
-    border: none;
-    background: none;
-    outline: none;
+.user-info span[style*="STUDENT"]{
+  background: rgba(224,231,255,.92) !important;
+  color: rgba(79,70,229,.98) !important;
+  border: 1px solid rgba(255,255,255,.40);
 }
 
-input, select, textarea {
-    font-family: inherit;
-    font-size: inherit;
-    outline: none;
+/* nav */
+.nav-menu{
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px 6px 8px;
+  margin-top: 8px;
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,.18) transparent;
+}
+.nav-menu::-webkit-scrollbar{ width: 8px; }
+.nav-menu::-webkit-scrollbar-thumb{ background: rgba(255,255,255,.16); border-radius: 99px; }
+
+.nav-link{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  color: rgba(234,240,255,.92);
+  border: 1px solid transparent;
+  transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  min-height: 46px;
+  font-size: 14.5px;
+}
+.nav-link i{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 12px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.10);
+}
+.nav-link:hover{
+  background: rgba(255,255,255,.06);
+  border-color: rgba(255,255,255,.12);
+  transform: translateX(2px);
+}
+.nav-link.active{
+  background:
+    radial-gradient(120% 160% at 10% 20%, rgba(255,255,255,.14), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.55), rgba(34,211,238,.20));
+  border-color: rgba(255,255,255,.18);
+  box-shadow: 0 18px 40px rgba(79,70,229,.18);
+}
+.badge{
+  margin-left:auto;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--text);
+  background:
+    radial-gradient(120% 180% at 20% 20%, rgba(255,255,255,.20), transparent 55%),
+    linear-gradient(135deg, rgba(251,113,133,.70), rgba(79,70,229,.35));
+  border: 1px solid rgba(255,255,255,.18);
 }
 
-img {
-    max-width: 100%;
-    height: auto;
+/* quick stats + logout */
+.sidebar-quick-stats{
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: var(--r16);
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+}
+.sidebar-stat{
+  display:flex;
+  gap: 12px;
+  align-items:center;
+  padding: 10px;
+  border-radius: 14px;
+}
+.sidebar-stat:hover{ background: rgba(255,255,255,.04); }
+.sidebar-stat-icon{
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  display:grid;
+  place-items:center;
+  border: 1px solid rgba(255,255,255,.12);
+  background:
+    radial-gradient(120% 180% at 20% 10%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.35), rgba(79,70,229,.35));
+  box-shadow: 0 14px 26px rgba(0,0,0,.18);
+}
+.sidebar-stat-label{ font-size: 12px; color: var(--muted); }
+.sidebar-stat-number{ font-size: 18px; font-weight: 950; }
+
+.sidebar-footer{ margin-top: 12px; }
+.logout-btn{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap: 10px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  background:
+    radial-gradient(140% 180% at 20% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(135deg, rgba(96,165,250,.16), rgba(255,255,255,.03));
+  box-shadow: 0 14px 26px rgba(0,0,0,.16);
 }
 
-/* ===== UTILITY CLASSES ===== */
-.container {
-    width: 100%;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 var(--spacing-md);
+/* ===== Main ===== */
+.main-content{
+  padding: 22px 22px 32px;
+}
+.main-content > *{
+  max-width: 1180px;
+}
+@media (min-width: 1200px){
+  .main-content{ display:flex; flex-direction: column; align-items:flex-start; }
 }
 
-.flex {
-    display: flex;
+/* Header */
+.page-header{
+  width: 100%;
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 16px;
+  border-radius: var(--r20);
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(120% 220% at 15% 10%, rgba(255,255,255,.10), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: var(--shadow2);
+}
+.header-content h1{ margin:0 0 6px; font-size: 24px; font-weight: 950; }
+.header-content p{ margin:0; color: var(--muted); font-size: 14px; }
+/* Buttons */
+.btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.04);
+  color: rgba(234,240,255,.92);
+  font-weight: 900;
+  font-size: 13px;
+  transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+.btn:hover{
+  transform: translateY(-1px);
+  background: rgba(255,255,255,.06);
+  border-color: rgba(255,255,255,.18);
+  box-shadow: 0 16px 36px rgba(0,0,0,.24);
+}
+.btn-sm{ padding: 8px 12px; font-size: 12px; border-radius: 12px; }
+
+.btn-primary{
+  border-color: rgba(255,255,255,.18);
+  background:
+    radial-gradient(120% 160% at 10% 20%, rgba(255,255,255,.14), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.85), rgba(34,211,238,.25));
+  box-shadow: 0 18px 40px rgba(79,70,229,.18);
 }
 
-.flex-col {
-    flex-direction: column;
+.btn-outline{
+  background: rgba(255,255,255,.04);
+  color: rgba(234,240,255,.92);
+  border: 1px solid rgba(255,255,255,.14);
+}
+.btn-outline.active{
+  background:
+    radial-gradient(120% 160% at 10% 20%, rgba(255,255,255,.14), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.70), rgba(34,211,238,.18));
+  border-color: rgba(255,255,255,.18);
 }
 
-.items-center {
-    align-items: center;
+/* Alerts */
+.alert{
+  width: 100%;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  display:flex;
+  align-items:center;
+  gap: 10px;
+}
+.alert i{
+  width: 34px; height:34px;
+  display:grid; place-items:center;
+  border-radius: 12px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.10);
+}
+.alert-success{ border-color: rgba(52,211,153,.25); }
+.alert-success i{ color: var(--success); }
+.alert-error{ border-color: rgba(251,113,133,.25); }
+.alert-error i{ color: var(--danger); }
+
+/* ===== Notifications List ===== */
+.notifications-container{ max-width: 980px; margin: 0 auto; }
+
+.notifications-list{
+  width: 100%;
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
 }
 
-.justify-between {
-    justify-content: space-between;
+.notification-item{
+  width: 100%;
+  display:flex;
+  align-items:flex-start;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  box-shadow: 0 18px 40px rgba(0,0,0,.20);
+  transition: transform .18s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease;
+  position: relative;
+}
+.notification-item:hover{
+  transform: translateY(-2px);
+  border-color: rgba(255,255,255,.14);
+  background: rgba(255,255,255,.04);
+  box-shadow: 0 22px 55px rgba(0,0,0,.28);
 }
 
-.gap-sm { gap: var(--spacing-sm); }
-.gap-md { gap: var(--spacing-md); }
-.gap-lg { gap: var(--spacing-lg); }
-
-.mt-sm { margin-top: var(--spacing-sm); }
-.mt-md { margin-top: var(--spacing-md); }
-.mt-lg { margin-top: var(--spacing-lg); }
-.mb-sm { margin-bottom: var(--spacing-sm); }
-.mb-md { margin-bottom: var(--spacing-md); }
-.mb-lg { margin-bottom: var(--spacing-lg); }
-
-.text-center { text-align: center; }
-.text-right { text-align: right; }
-.text-primary { color: var(--primary); }
-.text-success { color: var(--success); }
-.text-danger { color: var(--danger); }
-.text-warning { color: var(--warning); }
-.text-muted { color: var(--gray-dark); }
-
-.bg-white { background: var(--white); }
-.bg-light { background: var(--light); }
-.bg-primary { background: var(--primary); }
-.bg-success { background: var(--success); }
-.bg-danger { background: var(--danger); }
-
-.rounded-sm { border-radius: var(--radius-sm); }
-.rounded-md { border-radius: var(--radius-md); }
-.rounded-lg { border-radius: var(--radius-lg); }
-
-.shadow-sm { box-shadow: var(--shadow-sm); }
-.shadow-md { box-shadow: var(--shadow-md); }
-.shadow-lg { box-shadow: var(--shadow-lg); }
-
-/* ===== BUTTONS ===== */
-.btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--spacing-sm);
-    padding: 0.625rem 1.25rem;
-    border-radius: var(--radius-md);
-    font-weight: 500;
-    font-size: var(--font-size-sm);
-    transition: all var(--transition-base);
-    border: 1px solid transparent;
-    cursor: pointer;
+/* unread glow */
+.notification-item.unread{
+  border-color: rgba(79,70,229,.30);
+  background:
+    radial-gradient(120% 200% at 10% 0%, rgba(79,70,229,.18), transparent 60%),
+    rgba(255,255,255,.03);
 }
 
-.btn-primary {
-    background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-    color: var(--white);
-    box-shadow: var(--shadow-md);
+/* icon */
+.notification-icon{
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  display:grid;
+  place-items:center;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.05);
+  color: rgba(234,240,255,.92);
+  flex-shrink: 0;
+  box-shadow: 0 14px 26px rgba(0,0,0,.18);
 }
 
-.btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-lg);
+/* type coloring */
+.notification-icon.goal{ color: rgba(34,211,153,.95); }
+.notification-icon.achievement{ color: rgba(251,191,36,.95); }
+.notification-icon.bell{ color: rgba(34,211,238,.95); }
+
+.notification-item.unread .notification-icon{
+  background:
+    radial-gradient(120% 180% at 20% 10%, rgba(255,255,255,.20), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.85), rgba(34,211,238,.25));
+  border-color: rgba(255,255,255,.18);
+  color: rgba(234,240,255,.96);
 }
 
-.btn-outline {
-    background: transparent;
-    color: var(--primary);
-    border-color: var(--primary);
+.notification-content{
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.notification-title{
+  font-weight: 950;
+  font-size: 14px;
+  color: rgba(234,240,255,.95);
+  margin-bottom: 4px;
+}
+.notification-message{
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+.notification-time{
+  font-size: 11.5px;
+  color: var(--muted2);
+  font-weight: 800;
 }
 
-.btn-outline:hover {
-    background: var(--primary);
-    color: var(--white);
+/* actions */
+.notification-actions{
+  display:flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.notification-actions .btn-sm{
+  width: 140px;
+  justify-content:center;
 }
 
-.btn-sm {
-    padding: 0.375rem 0.75rem;
-    font-size: var(--font-size-xs);
+/* Empty state */
+.empty-state{
+  width: 100%;
+  text-align:center;
+  padding: 22px 14px;
+  color: var(--muted);
+  border-radius: var(--r20);
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  box-shadow: var(--shadow2);
+  margin-top: 14px;
+}
+.empty-state i{
+  display:inline-grid;
+  place-items:center;
+  width: 52px;
+  height: 52px;
+  border-radius: 18px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05);
 }
 
-.btn-lg {
-    padding: 0.75rem 1.5rem;
-    font-size: var(--font-size-base);
+/* Pagination */
+.pagination{
+  width: 100%;
+  display:flex;
+  justify-content:center;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
 }
+.pagination a.btn{ padding: 8px 12px; border-radius: 12px; }
 
-/* ===== DASHBOARD LAYOUT - FIXED SIDEBAR WITH SCROLLABLE MAIN ===== */
-.dashboard-wrapper {
-    display: flex;
-    min-height: 100vh;
-    position: relative;
-}
+/* ===== Responsive ===== */
+@media (max-width: 860px){
+  .dashboard-wrapper{ grid-template-columns: 1fr; }
+  .mobile-toggle{ display:grid; }
 
-/* ===== SIDEBAR - FIXED, NON-SCROLLABLE ===== */
-.sidebar {
-    width: 280px;
-    background: var(--white);
-    border-right: 1px solid var(--gray);
+  .sidebar{
     position: fixed;
-    height: 100vh;
-    left: 0;
-    top: 0;
-    z-index: 1000;
-    display: flex;
-    flex-direction: column;
-    transition: transform var(--transition-base);
-    overflow: hidden; /* Changed from auto to hidden */
-    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.08);
+    left: 0; top: 0;
+    width: 320px;
+    transform: translateX(-105%);
+    transition: transform .25s ease;
+    z-index: 1601;
+  }
+  .sidebar.active{ transform: translateX(0); }
+  .sidebar-close{ display:grid; }
+
+  .main-content{ padding: 18px 14px 28px; }
 }
 
-/* Remove scrollbar styles since sidebar is non-scrollable */
-.sidebar::-webkit-scrollbar {
-    display: none;
+@media (max-width: 760px){
+  .page-header{ flex-direction: column; align-items: flex-start; }
+  .notification-item{ flex-direction: column; }
+  .notification-actions{
+    flex-direction: row;
+    width: 100%;
+    margin-left: 0;
+  }
+  .notification-actions .btn-sm{ width: auto; flex: 1; }
 }
 
-.sidebar-header {
-    padding: var(--spacing-lg);
-    border-bottom: 1px solid var(--gray);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0; /* Prevent shrinking */
-}
-
-.logo {
-    font-size: var(--font-size-xl);
-    font-weight: 800;
-    color: var(--primary);
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-}
-
-.sidebar-close {
-    display: none;
-    color: var(--secondary);
-    font-size: var(--font-size-xl);
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: var(--spacing-xs);
-}
-
-.user-profile {
-    padding: var(--spacing-lg);
-    border-bottom: 1px solid var(--gray);
-    text-align: center;
-    flex-shrink: 0; /* Prevent shrinking */
-}
-
-.profile-pic {
-    width: 80px;
-    height: 80px;
-    border-radius: 50%;
-    object-fit: cover;
-    border: 4px solid var(--primary-light);
-    margin: 0 auto var(--spacing-md);
-}
-
-.profile-pic.default {
-    background: linear-gradient(135deg, var(--primary), #8b5cf6);
-    color: var(--white);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: var(--font-size-2xl);
-    font-weight: bold;
-}
-
-.user-info h4 {
-    font-size: var(--font-size-lg);
-    font-weight: 600;
-    margin-bottom: var(--spacing-xs);
-}
-
-.user-info p {
-    color: var(--secondary);
-    font-size: var(--font-size-sm);
-    margin-bottom: var(--spacing-sm);
-}
-
-.user-tag {
-    display: inline-block;
-    background: var(--primary-light);
-    color: var(--primary);
-    padding: 0.25rem 0.75rem;
-    border-radius: 20px;
-    font-size: var(--font-size-xs);
-    font-weight: 600;
-}
-
-/* Nav Menu - Now scrollable within fixed sidebar */
-.nav-menu {
-    flex: 1;
-    padding: var(--spacing-md) 0;
-    overflow-y: auto; /* Only nav menu scrolls */
-    min-height: 0; /* Important for flex scrolling */
-}
-
-.nav-menu::-webkit-scrollbar {
-    width: 6px;
-}
-
-.nav-menu::-webkit-scrollbar-track {
-    background: var(--light);
-}
-
-.nav-menu::-webkit-scrollbar-thumb {
-    background: var(--gray);
-    border-radius: 3px;
-}
-
-.nav-link {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: 0.875rem var(--spacing-lg);
-    margin: 0 var(--spacing-sm);
-    color: var(--secondary-dark);
-    font-weight: 500;
-    border-radius: var(--radius-md);
-    transition: all var(--transition-base);
-}
-
-.nav-link:hover {
-    background: var(--secondary-light);
-    color: var(--primary);
-    transform: translateX(4px);
-}
-
-.nav-link.active {
-    background: linear-gradient(90deg, var(--primary-light), transparent);
-    color: var(--primary);
-    font-weight: 600;
-    border-left: 4px solid var(--primary);
-}
-
-.nav-link i {
-    width: 24px;
-    text-align: center;
-    font-size: 1.125rem;
-}
-
-.badge {
-    background: linear-gradient(135deg, var(--danger), #dc2626);
-    color: var(--white);
-    font-size: var(--font-size-xs);
-    padding: 0.25rem 0.5rem;
-    border-radius: 20px;
-    margin-left: auto;
-    font-weight: 700;
-    min-width: 1.5rem;
-    text-align: center;
-}
-
-.sidebar-quick-stats {
-    padding: var(--spacing-lg);
-    background: var(--secondary-light);
-    border-top: 1px solid var(--gray);
-    flex-shrink: 0; /* Prevent shrinking */
-}
-
-.sidebar-stat {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    margin-bottom: var(--spacing-md);
-}
-
-.sidebar-stat:last-child {
-    margin-bottom: 0;
-}
-
-.sidebar-stat-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: var(--radius-md);
-    background: var(--primary-light);
-    color: var(--primary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.25rem;
-}
-
-.sidebar-stat-number {
-    font-size: var(--font-size-lg);
-    font-weight: 700;
-    color: var(--dark);
-}
-
-.sidebar-stat-label {
-    font-size: var(--font-size-xs);
-    color: var(--secondary);
-}
-
-.logout-btn {
-    margin: var(--spacing-lg);
-    background: linear-gradient(135deg, var(--danger-light), #fecaca);
-    color: #dc2626;
-    padding: 0.875rem;
-    border-radius: var(--radius-lg);
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--spacing-sm);
-    transition: all var(--transition-base);
-    text-align: center;
-    text-decoration: none;
-    flex-shrink: 0; /* Prevent shrinking */
-}
-
-.logout-btn:hover {
-    background: linear-gradient(135deg, #fecaca, #fca5a5);
-    transform: translateY(-2px);
-}
-.main-content {
-            flex: 1;
-            margin-left: 280px;
-            padding: 2.5rem 2rem;
-            min-height: 100vh;
-            animation: fadeIn 0.7s ease-out;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .page-header {
-            margin-bottom: 3rem;
-            text-align: center;
-        }
-
-        .page-header h1 {
-            font-size: 3rem;
-            font-weight: 800;
-            color: var(--dark);
-            margin-bottom: 0.75rem;
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .page-header p {
-            font-size: 1.25rem;
-            color: var(--secondary);
-            max-width: 600px;
-            margin: 0 auto;
-        }
-
-        .back-btn {
-            position: absolute;
-            top: 2.5rem;
-            left: 2rem;
-            background: rgba(255,255,255,0.9);
-            backdrop-filter: blur(10px);
-            padding: 0.75rem 1.25rem;
-            border-radius: var(--radius-md);
-            box-shadow: var(--shadow-md);
-            transition: var(--transition);
-        }
-
-        .back-btn:hover {
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-lg);
-        }
-
-        /* Alerts */
-        .alert {
-            padding: 1rem 1.5rem;
-            border-radius: var(--radius-md);
-            margin-bottom: 1.5rem;
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            font-weight: 500;
-            box-shadow: var(--shadow-sm);
-        }
-
-        .alert-success { background: #d1fae5; color: #065f46; border-left: 5px solid var(--success); }
-        .alert-error { background: #fee2e2; color: #991b1b; border-left: 5px solid var(--danger); }
-
-        /* Notifications List - Clean & Modern */
-        .notifications-container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-
-        .notifications-list {
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-        }
-
-        .notification-item {
-            background: var(--white);
-            border-radius: var(--radius-lg);
-            padding: 1.4rem 1.6rem;
-            box-shadow: var(--shadow-sm);
-            border: 1px solid var(--gray);
-            display: flex;
-            align-items: flex-start;
-            gap: 1.2rem;
-            transition: var(--transition);
-            position: relative;
-        }
-
-        .notification-item:hover {
-            box-shadow: var(--shadow-md);
-            transform: translateY(-4px);
-        }
-
-        .notification-item.unread {
-            background: var(--primary-light);
-            border-left: 5px solid var(--primary);
-        }
-
-        .notification-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: var(--radius-md);
-            background: var(--primary-light);
-            color: var(--primary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.3rem;
-            flex-shrink: 0;
-        }
-
-        .notification-item.unread .notification-icon {
-            background: var(--primary);
-            color: white;
-        }
-
-        .notification-content {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .notification-title {
-            font-weight: 700;
-            font-size: 1.1rem;
-            color: var(--dark);
-            margin-bottom: 0.4rem;
-        }
-
-        .notification-message {
-            font-size: 0.98rem;
-            color: var(--secondary);
-            line-height: 1.5;
-            margin-bottom: 0.6rem;
-        }
-
-        .notification-time {
-            font-size: 0.85rem;
-            color: var(--gray-dark);
-        }
-
-        .notification-actions {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-            margin-left: auto;
-        }
-
-        .notification-actions .btn-sm {
-            padding: 0.4rem 0.8rem;
-            font-size: 0.85rem;
-            white-space: nowrap;
-        }
-
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 4rem 2rem;
-            background: var(--white);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-sm);
-            margin: 2rem auto;
-            max-width: 600px;
-        }
-
-        .empty-state i {
-            font-size: 4.5rem;
-            color: var(--gray-dark);
-            opacity: 0.3;
-            margin-bottom: 1.5rem;
-        }
-
-        .empty-state p {
-            font-size: 1.3rem;
-            color: var(--secondary);
-            margin-bottom: 1.5rem;
-        }
-
-        /* Pagination */
-        .pagination {
-            display: flex;
-            justify-content: center;
-            gap: 0.75rem;
-            margin-top: 2.5rem;
-            flex-wrap: wrap;
-        }
-
-        .pagination a {
-            padding: 0.6rem 1rem;
-            border-radius: var(--radius-md);
-            background: var(--white);
-            color: var(--primary);
-            border: 1px solid var(--gray);
-            font-weight: 500;
-            transition: var(--transition);
-        }
-
-        .pagination a:hover,
-        .pagination a.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-
-        /* Responsive */
-        @media (max-width: 992px) {
-            .main-content { margin-left: 0; padding-top: 90px; }
-            .back-btn { position: static; margin-bottom: 1.5rem; display: inline-flex; }
-            .page-header { text-align: left; }
-        }
-
-        @media (max-width: 768px) {
-            .notification-item {
-                flex-direction: column;
-            }
-            .notification-actions {
-                flex-direction: row;
-                width: 100%;
-                margin-left: 0;
-                margin-top: 1rem;
-            }
-            .page-header h1 { font-size: 2.4rem; }
-        }
     </style>
 </head>
+
 <body>
     <!-- ===== MOBILE MENU TOGGLE ===== -->
     <button class="mobile-toggle" id="sidebarToggle">
         <i class="fas fa-bars"></i>
     </button>
-    
+
     <!-- ===== DASHBOARD WRAPPER ===== -->
     <div class="dashboard-wrapper">
-        
+
         <!-- ===== SIDEBAR ===== -->
         <aside class="sidebar" id="sidebar">
             <!-- Sidebar Header -->
@@ -798,38 +689,24 @@ img {
             </div>
             <!-- Navigation Menu -->
             <nav class="nav-menu">
-                <a href="dashboard.php" class="nav-link">
-                    <i class="fas fa-tachometer-alt"></i>
-                    <span>Dashboard</span>
+                <a href="dashboard.php" class="nav-link <?php echo $current === 'dashboard.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tachometer-alt"></i> Dashboard
                 </a>
-                <a href="goals.php" class="nav-link">
-                    <i class="fas fa-bullseye"></i>
-                    <span>My Goals</span>
-                    <?php if ($total_goals > 0): ?>
-                        <span class="badge"><?php echo $total_goals; ?></span>
-                    <?php endif; ?>
+
+                <a href="goals.php" class="nav-link <?php echo $current === 'goals.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bullseye"></i> Goals
                 </a>
-                <a href="create_goal.php" class="nav-link">
-                    <i class="fas fa-plus-circle"></i>
-                    <span>Create Goal</span>
+
+                <a href="achievements.php" class="nav-link <?php echo $current === 'achievements.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-trophy"></i> Achievements
                 </a>
-                <a href="achievements.php" class="nav-link">
-                    <i class="fas fa-trophy"></i>
-                    <span>Achievements</span>
-                    <?php if ($total_points > 0): ?>
-                        <span class="badge"><?php echo $total_points; ?> pts</span>
-                    <?php endif; ?>
+
+                <a href="notifications.php" class="nav-link <?php echo $current === 'notifications.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bell"></i> Notifications
                 </a>
-                <a href="notifications.php" class="nav-link active">
-                    <i class="fas fa-inbox"></i>
-                    <span>Notifications</span>
-                    <?php if ($unread > 0): ?>
-                        <span class="badge"><?php echo $unread; ?></span>
-                    <?php endif; ?>
-                </a>
-                <a href="profile.php" class="nav-link">
-                    <i class="fas fa-user"></i>
-                    <span>Profile</span>
+
+                <a href="profile.php" class="nav-link <?php echo $current === 'profile.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-user"></i> Profile
                 </a>
             </nav>
             <!-- Quick Stats -->
@@ -853,7 +730,7 @@ img {
                     </div>
                 </div>
             </div>
-          
+
             <!-- Logout -->
             <div class="sidebar-footer">
                 <a href="../logout.php" class="logout-btn">
@@ -862,7 +739,7 @@ img {
                 </a>
             </div>
         </aside>
-        
+
         <!-- ===== MAIN CONTENT ===== -->
         <main class="main-content">
             <!-- Page Header -->
@@ -877,7 +754,7 @@ img {
                     </a>
                 </div>
             </header>
-            
+
             <!-- Alerts -->
             <?php if ($success): ?>
                 <div class="alert alert-success">
@@ -885,14 +762,14 @@ img {
                     <span><?php echo htmlspecialchars($success); ?></span>
                 </div>
             <?php endif; ?>
-            
+
             <?php if (!empty($error)): ?>
                 <div class="alert alert-error">
                     <i class="fas fa-exclamation-circle"></i>
                     <span><?php echo htmlspecialchars($error); ?></span>
                 </div>
             <?php endif; ?>
-            
+
             <!-- Notifications List -->
             <div class="notifications-list">
                 <?php if (empty($notifications)): ?>
@@ -924,7 +801,7 @@ img {
                     <?php endforeach; ?>
                 <?php endif; ?>
             </div>
-            
+
             <!-- Pagination -->
             <div class="pagination">
                 <?php for ($i = 1; $i <= $total_pages; $i++): ?>
@@ -933,26 +810,26 @@ img {
             </div>
         </main>
     </div>
-    
+
     <!-- ===== JAVASCRIPT ===== -->
     <script>
         // Mobile sidebar toggle
         const sidebarToggle = document.getElementById('sidebarToggle');
         const sidebar = document.getElementById('sidebar');
         const sidebarClose = document.getElementById('sidebarClose');
-        
+
         if (sidebarToggle) {
             sidebarToggle.addEventListener('click', function() {
                 sidebar.classList.add('active');
             });
         }
-        
+
         if (sidebarClose) {
             sidebarClose.addEventListener('click', function() {
                 sidebar.classList.remove('active');
             });
         }
-        
+
         // Close sidebar when clicking outside on mobile
         document.addEventListener('click', function(event) {
             if (window.innerWidth <= 768 &&
@@ -962,14 +839,14 @@ img {
                 sidebar.classList.remove('active');
             }
         });
-        
+
         // Handle window resize
         window.addEventListener('resize', function() {
             if (window.innerWidth > 768 && sidebar && sidebar.classList.contains('active')) {
                 sidebar.classList.remove('active');
             }
         });
-        
+
         // Auto-hide alerts after 5 seconds
         setTimeout(() => {
             const alerts = document.querySelectorAll('.alert');
@@ -981,20 +858,7 @@ img {
             });
         }, 5000);
     </script>
-    <script>setInterval(() => {
-    fetch('notifications_fetch.php')
-        .then(res => res.json())
-        .then(data => {
-            const notifBox = document.getElementById('notifBox');
-            notifBox.innerHTML = '';
-            data.forEach(n => {
-                const div = document.createElement('div');
-                div.className = 'notif-item';
-                div.textContent = `${n.title}: ${n.message}`;
-                notifBox.appendChild(div);
-            });
-        });
-}, 10000); // every 10 seconds
-</script>
+  
 </body>
+
 </html>

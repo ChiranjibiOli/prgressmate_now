@@ -8,7 +8,7 @@ $error = '';
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $email = $_POST['email'] ?? '';
     $password = $_POST['password'] ?? '';
-    
+
     if (empty($email) || empty($password)) {
         $error = "Please enter both email and password.";
     } else {
@@ -16,11 +16,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ? AND status = 'active'");
             $stmt->execute([$email]);
             $user = $stmt->fetch();
-            
+
             if ($user) {
                 // Check password
                 $password_valid = false;
-                
+
                 if (password_verify($password, $user['password'])) {
                     $password_valid = true;
                 } elseif ($password == $user['password']) {
@@ -31,18 +31,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     $update_stmt = $pdo->prepare("UPDATE users SET password = ? WHERE id = ?");
                     $update_stmt->execute([$hashed_password, $user['id']]);
                 }
-                
+
                 if ($password_valid) {
                     $_SESSION['user_id'] = $user['id'];
                     $_SESSION['name'] = $user['name'];
                     $_SESSION['email'] = $user['email'];
                     $_SESSION['role'] = $user['role'];
                     $_SESSION['profile_picture'] = $user['profile_picture'];
-                    
+
                     // Update last login
                     $update_stmt = $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
                     $update_stmt->execute([$user['id']]);
-                    
+
                     // Redirect based on role
                     if ($user['role'] == 'admin') {
                         header("Location: admin/admin.php");
@@ -64,6 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 ?>
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -76,7 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -86,58 +87,59 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             justify-content: center;
             padding: 20px;
         }
-        
+
         .login-container {
             width: 100%;
             max-width: 400px;
         }
-        
+
         .login-card {
             background: white;
             border-radius: 20px;
             padding: 40px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             animation: slideUp 0.5s ease;
         }
-        
+
         @keyframes slideUp {
             from {
                 opacity: 0;
                 transform: translateY(20px);
             }
+
             to {
                 opacity: 1;
                 transform: translateY(0);
             }
         }
-        
+
         .logo {
             text-align: center;
             margin-bottom: 30px;
         }
-        
+
         .logo i {
             font-size: 48px;
             color: #667eea;
             margin-bottom: 10px;
         }
-        
+
         .logo h1 {
             color: #333;
             font-size: 28px;
             font-weight: 700;
         }
-        
+
         .logo p {
             color: #666;
             font-size: 14px;
             margin-top: 5px;
         }
-        
+
         .form-group {
             margin-bottom: 20px;
         }
-        
+
         .form-group label {
             display: block;
             margin-bottom: 8px;
@@ -145,11 +147,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             font-weight: 500;
             font-size: 14px;
         }
-        
+
         .input-with-icon {
             position: relative;
         }
-        
+
         .input-with-icon i {
             position: absolute;
             left: 15px;
@@ -157,7 +159,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             transform: translateY(-50%);
             color: #999;
         }
-        
+
         .input-with-icon input {
             width: 100%;
             padding: 12px 15px 12px 45px;
@@ -166,13 +168,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             font-size: 16px;
             transition: all 0.3s;
         }
-        
+
         .input-with-icon input:focus {
             outline: none;
             border-color: #667eea;
             box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
         }
-        
+
         .btn-login {
             width: 100%;
             padding: 14px;
@@ -189,16 +191,16 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             justify-content: center;
             gap: 10px;
         }
-        
+
         .btn-login:hover {
             transform: translateY(-2px);
             box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
         }
-        
+
         .btn-login:active {
             transform: translateY(0);
         }
-        
+
         .error-message {
             background: #fee;
             color: #c33;
@@ -209,24 +211,24 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             align-items: center;
             gap: 10px;
         }
-        
+
         .links {
             text-align: center;
             margin-top: 25px;
             padding-top: 25px;
             border-top: 1px solid #eee;
         }
-        
+
         .links a {
             color: #667eea;
             text-decoration: none;
             font-size: 14px;
         }
-        
+
         .links a:hover {
             text-decoration: underline;
         }
-        
+
         .demo-credentials {
             margin-top: 20px;
             padding: 15px;
@@ -235,25 +237,26 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             font-size: 13px;
             color: #666;
         }
-        
+
         .demo-credentials h4 {
             margin-bottom: 10px;
             color: #333;
         }
-        
+
         .demo-credentials ul {
             list-style: none;
         }
-        
+
         .demo-credentials li {
             margin-bottom: 5px;
         }
-        
+
         .demo-credentials strong {
             color: #667eea;
         }
     </style>
 </head>
+
 <body>
     <div class="login-container">
         <div class="login-card">
@@ -262,14 +265,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 <h1>ProgressMate</h1>
                 <p>Track your progress, achieve your goals</p>
             </div>
-            
+
             <?php if ($error): ?>
                 <div class="error-message">
                     <i class="fas fa-exclamation-circle"></i>
                     <span><?php echo htmlspecialchars($error); ?></span>
                 </div>
             <?php endif; ?>
-            
+
             <form method="POST" action="">
                 <div class="form-group">
                     <label for="email">Email Address</label>
@@ -278,7 +281,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         <input type="email" id="email" name="email" placeholder="Enter your email" required>
                     </div>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="password">Password</label>
                     <div class="input-with-icon">
@@ -286,17 +289,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         <input type="password" id="password" name="password" placeholder="Enter your password" required>
                     </div>
                 </div>
-                
+
                 <button type="submit" class="btn-login">
                     <i class="fas fa-sign-in-alt"></i>
                     <span>Sign In</span>
                 </button>
             </form>
-            
+
             <div class="links">
                 <a href="register.php">Don't have an account? Register</a>
             </div>
-            
+
             <div class="demo-credentials">
                 <h4>Demo Credentials:</h4>
                 <ul>
@@ -306,12 +309,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             </div>
         </div>
     </div>
-    
+
     <script>
         // Add password visibility toggle
         const passwordInput = document.getElementById('password');
         const passwordIcon = passwordInput.previousElementSibling;
-        
+
         passwordIcon.addEventListener('click', function() {
             if (passwordInput.type === 'password') {
                 passwordInput.type = 'text';
@@ -321,12 +324,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 this.className = 'fas fa-eye-slash';
             }
         });
-        
+
         // Form validation
         document.querySelector('form').addEventListener('submit', function(e) {
             const email = document.getElementById('email').value;
             const password = document.getElementById('password').value;
-            
+
             if (!email || !password) {
                 e.preventDefault();
                 alert('Please fill in all fields.');
@@ -335,4 +338,5 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         });
     </script>
 </body>
+
 </html>

@@ -73,38 +73,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $target_value = floatval($_POST['target_value'] ?? 0);
     $unit = trim($_POST['unit'] ?? '');
     $due_date = $_POST['due_date'] ?: null;
-    $allowedPriorities = ['low','medium','high','critical'];
-$priority = $_POST['priority'] ?? 'medium';
-if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
+    $allowedPriorities = ['low', 'medium', 'high', 'critical'];
+    $priority = $_POST['priority'] ?? 'medium';
+    if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
 
     $estimated_hours = !empty($_POST['estimated_hours']) ? floatval($_POST['estimated_hours']) : null;
     $start_date = $_POST['start_date'] ?: date('Y-m-d');
 
     // Validation
     $errors = [];
-    
+
     if (empty($title)) {
         $errors[] = "Goal title is required.";
     } elseif (strlen($title) < 3) {
         $errors[] = "Title must be at least 3 characters.";
     }
-    
+
     if ($target_value <= 0) {
         $errors[] = "Target value must be greater than 0.";
     }
-    
+
     if (empty($unit)) {
         $errors[] = "Unit is required (e.g., hours, pages, chapters).";
     }
-    
+
     if ($due_date && $due_date < date('Y-m-d')) {
         $errors[] = "Due date cannot be in the past.";
     }
-    
+
     if ($start_date && $due_date && $start_date > $due_date) {
         $errors[] = "Start date cannot be after due date.";
     }
-    
+
     if ($estimated_hours !== null && $estimated_hours <= 0) {
         $errors[] = "Estimated hours must be greater than 0 if provided.";
     }
@@ -114,24 +114,41 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             $pdo->beginTransaction();
 
             // Insert into student_goals
-            $stmt = $pdo->prepare("INSERT INTO student_goals 
-                (student_id, title, description, category, target_value, current_value, unit, 
-                 start_date, due_date, priority, status, is_self_created, estimated_hours,
-                 progress_percentage, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 'pending', 1, ?, 0, NOW(), NOW())");
-            
+            $stmt = $pdo->prepare("
+INSERT INTO student_goals (
+  student_id,
+  title,
+  description,
+  category,
+  unit,
+  target_value,
+  current_value,
+  progress_percentage,
+  priority,
+  status,
+  is_admin_created,
+  is_self_created,
+  created_at
+)
+VALUES (
+  ?, ?, ?, ?, ?, ?,
+  0, 0,
+  ?, 'pending',
+  0, 1,
+  NOW()
+)
+");
+
             $stmt->execute([
-                $student_id, 
-                $title, 
-                $description, 
-                $category, 
-                $target_value, 
+                $student_id,
+                $title,
+                $description,
+                $category,
                 $unit,
-                $start_date,
-                $due_date, 
-                $priority,
-                $estimated_hours
+                $target_value,
+                $priority
             ]);
+
 
             $new_goal_id = $pdo->lastInsertId();
 
@@ -170,10 +187,13 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
         $error = implode(" ", $errors);
     }
 }
+
+$current = basename($_SERVER['PHP_SELF']);
 ?>
 
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -186,12 +206,12 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             --primary: #4f46e5;
             --primary-light: #eef2ff;
             --primary-dark: #4338ca;
-            
+
             /* Secondary Colors */
             --secondary: #64748b;
             --secondary-light: #f8fafc;
             --secondary-dark: #475569;
-            
+
             /* Status Colors */
             --success: #10b981;
             --success-light: #d1fae5;
@@ -202,7 +222,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             --info: #3b82f6;
             --info-light: #dbeafe;
             --purple: #8b5cf6;
-            
+
             /* Neutral Colors */
             --dark: #1e293b;
             --light: #f1f5f9;
@@ -210,7 +230,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             --gray: #e2e8f0;
             --gray-light: #f9fafb;
             --gray-dark: #6b7280;
-            
+
             /* Typography */
             --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             --font-size-xs: 0.75rem;
@@ -221,7 +241,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             --font-size-2xl: 1.5rem;
             --font-size-3xl: 1.875rem;
             --font-size-4xl: 2.25rem;
-            
+
             /* Spacing */
             --spacing-xs: 0.25rem;
             --spacing-sm: 0.5rem;
@@ -229,7 +249,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             --spacing-lg: 1.5rem;
             --spacing-xl: 2rem;
             --spacing-2xl: 3rem;
-            
+
             /* Borders & Shadows */
             --radius-sm: 0.375rem;
             --radius-md: 0.5rem;
@@ -240,7 +260,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
             --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-            
+
             /* Transitions */
             --transition-fast: 150ms ease;
             --transition-base: 300ms ease;
@@ -281,7 +301,9 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             outline: none;
         }
 
-        input, select, textarea {
+        input,
+        select,
+        textarea {
             font-family: inherit;
             font-size: inherit;
             outline: none;
@@ -515,8 +537,15 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         /* Page Header */
@@ -580,8 +609,15 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
         }
 
         @keyframes slideIn {
-            from { opacity: 0; transform: translateX(-10px); }
-            to { opacity: 1; transform: translateX(0); }
+            from {
+                opacity: 0;
+                transform: translateX(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
         }
 
         .alert-success {
@@ -767,9 +803,17 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             margin-bottom: 0.5rem;
         }
 
-        .priority-option.low .priority-icon { color: #94a3b8; }
-        .priority-option.medium .priority-icon { color: var(--primary); }
-        .priority-option.high .priority-icon { color: var(--danger); }
+        .priority-option.low .priority-icon {
+            color: #94a3b8;
+        }
+
+        .priority-option.medium .priority-icon {
+            color: var(--primary);
+        }
+
+        .priority-option.high .priority-icon {
+            color: var(--danger);
+        }
 
         .priority-option.selected .priority-icon {
             color: inherit;
@@ -891,7 +935,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             display: none;
             position: fixed;
             inset: 0;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0, 0, 0, 0.5);
             z-index: 999;
         }
 
@@ -901,20 +945,60 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                 transform: translateX(-100%);
                 width: 300px;
             }
-            .sidebar.active { transform: translateX(0); }
-            .sidebar-overlay.active { display: block; }
-            .sidebar-close { display: block; }
-            .mobile-toggle { display: flex; align-items: center; justify-content: center; }
-            .main-content { margin-left: 0; padding: 24px 16px; padding-top: 80px; }
-            .page-header { flex-direction: column; align-items: flex-start; }
-            .form-container { padding: 2rem; }
-            .form-row { grid-template-columns: 1fr; }
-            .form-actions { flex-direction: column; }
-            .btn { width: 100%; justify-content: center; }
-            .priority-options { flex-direction: column; }
+
+            .sidebar.active {
+                transform: translateX(0);
+            }
+
+            .sidebar-overlay.active {
+                display: block;
+            }
+
+            .sidebar-close {
+                display: block;
+            }
+
+            .mobile-toggle {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .main-content {
+                margin-left: 0;
+                padding: 24px 16px;
+                padding-top: 80px;
+            }
+
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .form-container {
+                padding: 2rem;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .form-actions {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .priority-options {
+                flex-direction: column;
+            }
         }
     </style>
 </head>
+
 <body>
     <button class="mobile-toggle" id="sidebarToggle"><i class="fas fa-bars"></i></button>
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -941,26 +1025,48 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             </div>
 
             <nav class="nav-menu">
-                <a href="dashboard.php" class="nav-link"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
-                <a href="goals.php" class="nav-link"><i class="fas fa-bullseye"></i> My Goals <?php if ($total_goals > 0): ?><span class="badge"><?php echo $total_goals; ?></span><?php endif; ?></a>
-                <a href="create_goal.php" class="nav-link active"><i class="fas fa-plus-circle"></i> Create Goal</a>
-                <a href="achievements.php" class="nav-link"><i class="fas fa-trophy"></i> Achievements <?php if ($total_points > 0): ?><span class="badge"><?php echo $total_points; ?> pts</span><?php endif; ?></a>
-                <a href="notifications.php" class="nav-link"><i class="fas fa-inbox"></i> Notifications <?php if ($unread > 0): ?><span class="badge"><?php echo $unread; ?></span><?php endif; ?></a>
-                <a href="profile.php" class="nav-link"><i class="fas fa-user"></i> Profile</a>
+                <a href="dashboard.php" class="nav-link <?php echo $current === 'dashboard.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tachometer-alt"></i> Dashboard
+                </a>
+
+                <a href="goals.php" class="nav-link <?php echo $current === 'goals.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bullseye"></i> Goals
+                </a>
+
+                <a href="achievements.php" class="nav-link <?php echo $current === 'achievements.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-trophy"></i> Achievements
+                </a>
+
+                <a href="notifications.php" class="nav-link <?php echo $current === 'notifications.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bell"></i> Notifications
+                </a>
+
+                <a href="profile.php" class="nav-link <?php echo $current === 'profile.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-user"></i> Profile
+                </a>
             </nav>
 
             <div class="sidebar-quick-stats">
                 <div class="sidebar-stat">
                     <div class="sidebar-stat-icon"><i class="fas fa-bullseye"></i></div>
-                    <div><div class="sidebar-stat-label">Goals</div><div class="sidebar-stat-number"><?php echo $completed_goals; ?>/<?php echo $total_goals; ?></div></div>
+                    <div>
+                        <div class="sidebar-stat-label">Goals</div>
+                        <div class="sidebar-stat-number"><?php echo $completed_goals; ?>/<?php echo $total_goals; ?></div>
+                    </div>
                 </div>
                 <div class="sidebar-stat">
                     <div class="sidebar-stat-icon"><i class="fas fa-star"></i></div>
-                    <div><div class="sidebar-stat-label">Points</div><div class="sidebar-stat-number"><?php echo $total_points; ?></div></div>
+                    <div>
+                        <div class="sidebar-stat-label">Points</div>
+                        <div class="sidebar-stat-number"><?php echo $total_points; ?></div>
+                    </div>
                 </div>
                 <div class="sidebar-stat">
                     <div class="sidebar-stat-icon"><i class="fas fa-fire"></i></div>
-                    <div><div class="sidebar-stat-label">Streak</div><div class="sidebar-stat-number"><?php echo $streak; ?> days</div></div>
+                    <div>
+                        <div class="sidebar-stat-label">Streak</div>
+                        <div class="sidebar-stat-number"><?php echo $streak; ?> days</div>
+                    </div>
                 </div>
             </div>
 
@@ -987,7 +1093,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                     <span><?php echo htmlspecialchars($success); ?></span>
                 </div>
             <?php endif; ?>
-            
+
             <?php if ($error): ?>
                 <div class="alert alert-error">
                     <i class="fas fa-exclamation-circle"></i>
@@ -1001,33 +1107,33 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                     <!-- Basic Information Section -->
                     <div class="form-section">
                         <h3><i class="fas fa-info-circle"></i> Basic Information</h3>
-                        
+
                         <div class="form-group">
                             <label for="title" class="required">Goal Title</label>
-                            <input type="text" id="title" name="title" 
-                                   placeholder="What do you want to achieve?" 
-                                   value="<?php echo htmlspecialchars($form_data['title']); ?>" 
-                                   required maxlength="200">
+                            <input type="text" id="title" name="title"
+                                placeholder="What do you want to achieve?"
+                                value="<?php echo htmlspecialchars($form_data['title']); ?>"
+                                required maxlength="200">
                             <div class="form-help">Be specific about what you want to accomplish</div>
                         </div>
-                        
+
                         <div class="form-group">
                             <label for="description">Description</label>
-                            <textarea id="description" name="description" 
-                                      placeholder="Describe your goal in detail... What steps will you take? Why is this important to you?"><?php echo htmlspecialchars($form_data['description']); ?></textarea>
+                            <textarea id="description" name="description"
+                                placeholder="Describe your goal in detail... What steps will you take? Why is this important to you?"><?php echo htmlspecialchars($form_data['description']); ?></textarea>
                             <div class="form-help">Optional: Add details, reasons, or steps to achieve this goal</div>
                         </div>
-                        
+
                         <div class="form-group">
                             <label for="category">Category</label>
-                            <input type="text" id="category" name="category" 
-                                   placeholder="e.g., Health, Education, Career, Personal, Fitness"
-                                   value="<?php echo htmlspecialchars($form_data['category']); ?>"
-                                   list="categorySuggestions">
+                            <input type="text" id="category" name="category"
+                                placeholder="e.g., Health, Education, Career, Personal, Fitness"
+                                value="<?php echo htmlspecialchars($form_data['category']); ?>"
+                                list="categorySuggestions">
                             <datalist id="categorySuggestions">
                                 <?php foreach ($all_categories as $cat): ?>
                                     <option value="<?php echo htmlspecialchars($cat); ?>">
-                                <?php endforeach; ?>
+                                    <?php endforeach; ?>
                             </datalist>
                             <?php if (!empty($all_categories)): ?>
                                 <div class="form-help">Suggestions: Click to select</div>
@@ -1041,80 +1147,80 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                             <?php endif; ?>
                         </div>
                     </div>
-                    
+
                     <!-- Goal Details Section -->
                     <div class="form-section">
                         <h3><i class="fas fa-cog"></i> Goal Details</h3>
-                        
+
                         <div class="form-row">
                             <div class="form-group">
                                 <label for="target_value" class="required">Target Value</label>
-                                <input type="number" id="target_value" name="target_value" 
-                                       min="0.01" step="0.01" 
-                                       placeholder="e.g., 100, 5.5, 30"
-                                       value="<?php echo htmlspecialchars($form_data['target_value']); ?>"
-                                       required>
+                                <input type="number" id="target_value" name="target_value"
+                                    min="0.01" step="0.01"
+                                    placeholder="e.g., 100, 5.5, 30"
+                                    value="<?php echo htmlspecialchars($form_data['target_value']); ?>"
+                                    required>
                                 <div class="form-help">The numerical target you want to achieve</div>
                             </div>
-                            
+
                             <div class="form-group">
                                 <label for="unit" class="required">Unit</label>
-                                <input type="text" id="unit" name="unit" 
-                                       placeholder="e.g., pages, kilometers, hours, kg, chapters"
-                                       value="<?php echo htmlspecialchars($form_data['unit']); ?>"
-                                       required>
+                                <input type="text" id="unit" name="unit"
+                                    placeholder="e.g., pages, kilometers, hours, kg, chapters"
+                                    value="<?php echo htmlspecialchars($form_data['unit']); ?>"
+                                    required>
                                 <div class="unit-examples">Examples: pages (books), km (distance), hours (study), kg (weight), chapters (learning)</div>
                             </div>
                         </div>
-                        
+
                         <div class="form-row">
                             <div class="form-group">
                                 <label for="start_date">Start Date</label>
-                                <input type="date" id="start_date" name="start_date" 
-                                       value="<?php echo htmlspecialchars($form_data['start_date'] ?? date('Y-m-d')); ?>">
+                                <input type="date" id="start_date" name="start_date"
+                                    value="<?php echo htmlspecialchars($form_data['start_date'] ?? date('Y-m-d')); ?>">
                                 <div class="form-help">When you plan to start working on this goal</div>
                             </div>
-                            
+
                             <div class="form-group">
                                 <label for="due_date">Due Date</label>
-                                <input type="date" id="due_date" name="due_date" 
-                                       value="<?php echo htmlspecialchars($form_data['due_date']); ?>">
+                                <input type="date" id="due_date" name="due_date"
+                                    value="<?php echo htmlspecialchars($form_data['due_date']); ?>">
                                 <div class="form-help">Optional: Set a deadline for your goal</div>
                             </div>
                         </div>
-                        
+
                         <div class="form-row">
                             <div class="form-group">
                                 <label for="estimated_hours">Estimated Hours</label>
-                                <input type="number" id="estimated_hours" name="estimated_hours" 
-                                       min="0.5" step="0.5"
-                                       placeholder="e.g., 10.5, 20, 5"
-                                       value="<?php echo htmlspecialchars($form_data['estimated_hours']); ?>">
+                                <input type="number" id="estimated_hours" name="estimated_hours"
+                                    min="0.5" step="0.5"
+                                    placeholder="e.g., 10.5, 20, 5"
+                                    value="<?php echo htmlspecialchars($form_data['estimated_hours']); ?>">
                                 <div class="form-help">Optional: Estimated time needed to complete</div>
                             </div>
-                            
+
                             <div class="form-group">
                                 <label for="priority">Priority</label>
                                 <input type="hidden" id="priority" name="priority" value="<?php echo htmlspecialchars($form_data['priority']); ?>">
                                 <div class="priority-options">
-                                    <div class="priority-option low <?php echo $form_data['priority'] == 'low' ? 'selected' : ''; ?>" 
-                                         data-value="low">
+                                    <div class="priority-option low <?php echo $form_data['priority'] == 'low' ? 'selected' : ''; ?>"
+                                        data-value="low">
                                         <div class="priority-icon">
                                             <i class="fas fa-arrow-down"></i>
                                         </div>
                                         <div>Low Priority</div>
                                     </div>
-                                    
-                                    <div class="priority-option medium <?php echo $form_data['priority'] == 'medium' ? 'selected' : ''; ?>" 
-                                         data-value="medium">
+
+                                    <div class="priority-option medium <?php echo $form_data['priority'] == 'medium' ? 'selected' : ''; ?>"
+                                        data-value="medium">
                                         <div class="priority-icon">
                                             <i class="fas fa-equals"></i>
                                         </div>
                                         <div>Medium Priority</div>
                                     </div>
-                                    
-                                    <div class="priority-option high <?php echo $form_data['priority'] == 'high' ? 'selected' : ''; ?>" 
-                                         data-value="high">
+
+                                    <div class="priority-option high <?php echo $form_data['priority'] == 'high' ? 'selected' : ''; ?>"
+                                        data-value="high">
                                         <div class="priority-icon">
                                             <i class="fas fa-arrow-up"></i>
                                         </div>
@@ -1124,7 +1230,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                             </div>
                         </div>
                     </div>
-                    
+
                     <!-- Form Actions -->
                     <div class="form-actions">
                         <button type="reset" class="btn btn-outline">
@@ -1136,7 +1242,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                     </div>
                 </form>
             </div>
-            
+
             <!-- Tips Section -->
             <div class="tips-section">
                 <h3 style="margin-bottom: 1.5rem; color: var(--dark); display: flex; align-items: center; gap: 10px;">
@@ -1176,13 +1282,14 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
         const sidebarClose = document.getElementById('sidebarClose');
         const overlay = document.getElementById('sidebarOverlay');
 
-        function openSidebar() { 
-            sidebar.classList.add('active'); 
-            overlay.classList.add('active'); 
+        function openSidebar() {
+            sidebar.classList.add('active');
+            overlay.classList.add('active');
         }
-        function closeSidebar() { 
-            sidebar.classList.remove('active'); 
-            overlay.classList.remove('active'); 
+
+        function closeSidebar() {
+            sidebar.classList.remove('active');
+            overlay.classList.remove('active');
         }
 
         sidebarToggle?.addEventListener('click', openSidebar);
@@ -1191,9 +1298,9 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
 
         // Close sidebar when clicking outside on mobile
         document.addEventListener('click', function(event) {
-            if (window.innerWidth <= 768 && 
+            if (window.innerWidth <= 768 &&
                 sidebar && sidebar.classList.contains('active') &&
-                !sidebar.contains(event.target) && 
+                !sidebar.contains(event.target) &&
                 !sidebarToggle.contains(event.target)) {
                 closeSidebar();
             }
@@ -1213,10 +1320,10 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                 document.querySelectorAll('.priority-option').forEach(opt => {
                     opt.classList.remove('selected');
                 });
-                
+
                 // Add selected class to clicked option
                 this.classList.add('selected');
-                
+
                 // Update hidden input value
                 document.getElementById('priority').value = this.dataset.value;
             });
@@ -1230,12 +1337,12 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             const startDate = document.getElementById('start_date').value;
             const dueDate = document.getElementById('due_date').value;
             const estimatedHours = document.getElementById('estimated_hours').value;
-            
+
             // Clear previous errors
             document.querySelectorAll('.error-message').forEach(el => el.remove());
-            
+
             let hasError = false;
-            
+
             if (!title) {
                 showError('title', 'Please enter a goal title.');
                 hasError = true;
@@ -1243,17 +1350,17 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                 showError('title', 'Title must be at least 3 characters.');
                 hasError = true;
             }
-            
+
             if (!targetValue || parseFloat(targetValue) <= 0) {
                 showError('target_value', 'Target value must be greater than 0.');
                 hasError = true;
             }
-            
+
             if (!unit) {
                 showError('unit', 'Please specify the unit (e.g., pages, kilometers, hours).');
                 hasError = true;
             }
-            
+
             if (dueDate) {
                 const today = new Date().toISOString().split('T')[0];
                 if (dueDate < today) {
@@ -1261,22 +1368,22 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                     hasError = true;
                 }
             }
-            
+
             if (startDate && dueDate && startDate > dueDate) {
                 showError('start_date', 'Start date cannot be after due date.');
                 hasError = true;
             }
-            
+
             if (estimatedHours && parseFloat(estimatedHours) <= 0) {
                 showError('estimated_hours', 'Estimated hours must be greater than 0.');
                 hasError = true;
             }
-            
+
             if (hasError) {
                 e.preventDefault();
                 return false;
             }
-            
+
             return true;
         });
 
@@ -1288,31 +1395,33 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             error.style.fontSize = '0.85rem';
             error.style.marginTop = '0.5rem';
             error.innerHTML = `<i class="fas fa-exclamation-circle"></i> ${message}`;
-            
+
             if (field.parentNode.querySelector('.error-message')) {
                 field.parentNode.querySelector('.error-message').remove();
             }
-            
+
             field.parentNode.appendChild(error);
             field.style.borderColor = 'var(--danger)';
-            
+
             // Auto-remove error when user starts typing
             field.addEventListener('input', function() {
                 if (this.parentNode.querySelector('.error-message')) {
                     this.parentNode.querySelector('.error-message').remove();
                     this.style.borderColor = '';
                 }
-            }, { once: true });
+            }, {
+                once: true
+            });
         }
 
         // Auto-focus on title input
         document.getElementById('title').focus();
-        
+
         // Set minimum dates
         const today = new Date().toISOString().split('T')[0];
         document.getElementById('start_date').min = today;
         document.getElementById('due_date').min = today;
-        
+
         // Set default start date to today
         if (!document.getElementById('start_date').value) {
             document.getElementById('start_date').value = today;
@@ -1326,11 +1435,11 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
             charCount.style.textAlign = 'right';
             charCount.style.marginTop = '5px';
             descriptionTextarea.parentNode.appendChild(charCount);
-            
+
             function updateCharCount() {
                 const length = descriptionTextarea.value.length;
                 charCount.textContent = `${length}/1000 characters`;
-                
+
                 if (length > 1000) {
                     charCount.style.color = 'var(--danger)';
                 } else if (length > 800) {
@@ -1339,7 +1448,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                     charCount.style.color = 'var(--gray-dark)';
                 }
             }
-            
+
             descriptionTextarea.addEventListener('input', updateCharCount);
             updateCharCount();
         }
@@ -1355,7 +1464,7 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
                 });
                 document.querySelector('.priority-option.medium').classList.add('selected');
                 document.getElementById('priority').value = 'medium';
-                
+
                 // Reset dates to today
                 document.getElementById('start_date').value = today;
                 document.getElementById('due_date').value = '';
@@ -1379,4 +1488,5 @@ if (!in_array($priority, $allowedPriorities, true)) $priority = 'medium';
         }
     </script>
 </body>
+
 </html>

@@ -1,7 +1,7 @@
 <?php
+session_start();
 require_once '../includes/db_connection.php';
 require_once '../includes/functions.php';
-
 checkAuth('admin');
 
 $success = $_SESSION['success'] ?? '';
@@ -22,11 +22,11 @@ try {
 // Handle profile update
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $action = $_POST['action'] ?? '';
-    
+
     if ($action === 'update_profile') {
         $name = trim($_POST['name'] ?? '');
         $email = trim($_POST['email'] ?? '');
-        
+
         if (empty($name) || empty($email)) {
             $error = "Name and email are required.";
         } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -42,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                     }
                     $file_name = 'admin_' . $admin_id . '_' . time() . '.' . pathinfo($_FILES['profile_picture']['name'], PATHINFO_EXTENSION);
                     $target_path = $upload_dir . $file_name;
-                    
+
                     if (move_uploaded_file($_FILES['profile_picture']['tmp_name'], $target_path)) {
                         $profile_picture = 'uploads/profiles/' . $file_name;
                         // Delete old picture if exists
@@ -53,15 +53,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         $error = "Error uploading profile picture.";
                     }
                 }
-                
+
                 if (!$error) {
                     $stmt = $pdo->prepare("UPDATE users SET name = ?, email = ?, profile_picture = ? WHERE id = ?");
                     $stmt->execute([$name, $email, $profile_picture, $admin_id]);
-                    
+
                     $_SESSION['name'] = $name;
                     $_SESSION['email'] = $email;
                     $_SESSION['profile_picture'] = $profile_picture;
-                    
+
                     $success = "Profile updated successfully!";
                 }
             } catch (Exception $e) {
@@ -72,7 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         $current_password = $_POST['current_password'] ?? '';
         $new_password = $_POST['new_password'] ?? '';
         $confirm_password = $_POST['confirm_password'] ?? '';
-        
+
         if (empty($current_password) || empty($new_password) || empty($confirm_password)) {
             $error = "All password fields are required.";
         } elseif ($new_password !== $confirm_password) {
@@ -103,798 +103,547 @@ $sidebar_stats = [
     'assigned' => getStat($pdo, "SELECT COUNT(*) FROM student_goals"),
     'points' => getStat($pdo, "SELECT COALESCE(SUM(a.points), 0) FROM user_achievements ua JOIN achievements a ON ua.achievement_id = a.id")
 ];
+
+$current = basename($_SERVER['PHP_SELF']);
+
+// Sidebar stats (badges)
+$students_count = (int)($sidebar_stats['students'] ?? 0);
+$goals_count    = (int)($sidebar_stats['goals'] ?? 0);
+$assigned_count = (int)($sidebar_stats['assigned'] ?? 0);
+$points_count   = (int)($sidebar_stats['points'] ?? 0);
+
+
+// If you have progress requests table, show pending badge (safe if table exists)
+$pending_requests = 0;
+try {
+    $pending_requests = (int)$pdo->query("SELECT COUNT(*) FROM progress_requests WHERE status='pending'")->fetchColumn();
+} catch (Exception $e) {
+    $pending_requests = 0;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - ProgressMate</title>
-    <!-- <link rel="stylesheet" href="../assets/css/style.css"> -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-       /* ===== DASHBOARD BASE STYLES ===== */
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: 'Inter', sans-serif;
-            background: #f9fafb;
-            color: #333;
-            line-height: 1.5;
-        }
-
-        .dashboard-wrapper {
-            display: flex;
-            min-height: 100vh;
-        }
-
-        /* ===== SIDEBAR STYLES ===== */
-        .sidebar {
-            width: 280px;
-            background: white;
-            border-right: 1px solid #e5e7eb;
-            display: flex;
-            flex-direction: column;
-            position: fixed;
-            height: 100vh;
-            left: 0;
-            top: 0;
-            z-index: 1000;
-            transition: transform 0.3s ease;
-        }
-
-        @media (max-width: 768px) {
-            .sidebar {
-                transform: translateX(-100%);
-            }
-            .sidebar.active {
-                transform: translateX(0);
-            }
-        }
-
-        .sidebar-header {
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .logo {
-            color: #4f46e5;
-            font-weight: 700;
-            font-size: 20px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .sidebar-close {
-            display: none;
-            background: none;
-            border: none;
-            color: #6b7280;
-            cursor: pointer;
-            font-size: 20px;
-            margin-left: auto;
-        }
-
-        @media (max-width: 768px) {
-            .sidebar-close {
-                display: block;
-            }
-        }
-
-        .user-profile {
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        .profile-pic {
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 3px solid #e5e7eb;
-        }
-
-        .profile-pic.default {
-            background: linear-gradient(135deg, #4f46e5, #8b5cf6);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-            font-weight: bold;
-        }
-
-        .user-info h4 {
-            margin: 0 0 5px 0;
-            font-size: 16px;
-            font-weight: 600;
-        }
-
-        .user-info p {
-            margin: 0;
-            color: #6b7280;
-            font-size: 14px;
-        }
-
-        .nav-menu {
-            flex: 1;
-            padding: 20px 0;
-            overflow-y: auto;
-        }
-
-        .nav-link {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px 20px;
-            color: #374151;
-            text-decoration: none;
-            transition: all 0.2s;
-            position: relative;
-        }
-
-        .nav-link:hover {
-            background: #f3f4f6;
-            color: #4f46e5;
-        }
-
-        .nav-link.active {
-            background: #eef2ff;
-            color: #4f46e5;
-            border-left: 3px solid #4f46e5;
-        }
-
-        .nav-link i {
-            width: 20px;
-            text-align: center;
-        }
-
-        .badge {
-            background: #4f46e5;
-            color: white;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 600;
-            margin-left: auto;
-        }
-
-        .sidebar-footer {
-            padding: 20px;
-            border-top: 1px solid #e5e7eb;
-        }
-
-        .logout-btn {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px 20px;
-            background: #fee2e2;
-            color: #dc2626;
-            border: none;
-            border-radius: 8px;
-            width: 100%;
-            text-align: left;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        .logout-btn:hover {
-            background: #fecaca;
-        }
-
-        .sidebar-quick-stats {
-            padding: 20px;
-            border-top: 1px solid #e5e7eb;
-        }
-
-        .sidebar-stat {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 15px;
-        }
-
-        .sidebar-stat:last-child {
-            margin-bottom: 0;
-        }
-
-        .sidebar-stat-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            background: #eef2ff;
-            color: #4f46e5;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .sidebar-stat-info {
-            flex: 1;
-        }
-
-        .sidebar-stat-label {
-            font-size: 12px;
-            color: #6b7280;
-        }
-
-        .sidebar-stat-number {
-            font-size: 16px;
-            font-weight: 600;
-            color: #111827;
-        }
-
-        /* ===== MAIN CONTENT STYLES ===== */
-        .main-content {
-            flex: 1;
-            margin-left: 280px;
-            padding: 20px;
-            overflow-y: auto;
-        }
-
-        @media (max-width: 768px) {
-            .main-content {
-                margin-left: 0;
-                padding: 15px;
-            }
-        }
-
-        .mobile-toggle {
-            display: none;
-            position: fixed;
-            top: 15px;
-            left: 15px;
-            z-index: 999;
-            background: #4f46e5;
-            color: white;
-            border: none;
-            width: 40px;
-            height: 40px;
-            border-radius: 8px;
-            cursor: pointer;
-            align-items: center;
-            justify-content: center;
-        }
-
-        @media (max-width: 768px) {
-            .mobile-toggle {
-                display: flex;
-            }
-        }
-
-        /* ===== ADMIN DASHBOARD STYLES ===== */
-        .page-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 30px;
-        }
-
-        .header-content h1 {
-            margin: 0 0 10px 0;
-            font-size: 28px;
-            color: #111827;
-        }
-
-        .header-content p {
-            margin: 0;
-            color: #6b7280;
-        }
-
-        .btn {
-            padding: 10px 20px;
-            border-radius: 8px;
-            font-weight: 500;
-            cursor: pointer;
-            border: none;
-            transition: all 0.2s;
-            font-size: 14px;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .btn-primary {
-            background: #4f46e5;
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: #4338ca;
-        }
-
-        .btn-outline {
-            background: white;
-            color: #4f46e5;
-            border: 1px solid #4f46e5;
-        }
-
-        .btn-outline:hover {
-            background: #4f46e5;
-            color: white;
-        }
-
-        .btn-sm {
-            padding: 6px 12px;
-            font-size: 13px;
-        }
-
-        /* Stats Grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        .stat-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            border-left: 4px solid #4f46e5;
-        }
-
-        .stat-card.students { border-left-color: #3b82f6; }
-        .stat-card.goals { border-left-color: #10b981; }
-        .stat-card.assigned { border-left-color: #f59e0b; }
-        .stat-card.points { border-left-color: #8b5cf6; }
-
-        .stat-content {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        .stat-icon {
-            width: 50px;
-            height: 50px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px;
-        }
-
-        .stat-card.students .stat-icon { background: #dbeafe; color: #3b82f6; }
-        .stat-card.goals .stat-icon { background: #d1fae5; color: #10b981; }
-        .stat-card.assigned .stat-icon { background: #fef3c7; color: #f59e0b; }
-        .stat-card.points .stat-icon { background: #e0e7ff; color: #8b5cf6; }
-
-        .stat-number {
-            font-size: 28px;
-            font-weight: 700;
-            margin: 5px 0;
-            color: #111827;
-        }
-
-        .stat-label {
-            font-size: 14px;
-            color: #6b7280;
-        }
-
-        /* Content Grid */
-        .content-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        @media (max-width: 768px) {
-            .content-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        .card {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-
-        .card-header {
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .card-header h3 {
-            margin: 0;
-            font-size: 18px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .card-body {
-            padding: 20px;
-        }
-
-        /* Activity List */
-        .activity-list {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        .activity-item {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            padding: 10px;
-            border-radius: 8px;
-            background: #f9fafb;
-        }
-
-        .activity-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 8px;
-            background: #e0e7ff;
-            color: #4f46e5;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .activity-content {
-            flex: 1;
-        }
-
-        .activity-title {
-            font-weight: 500;
-            color: #111827;
-            margin-bottom: 2px;
-        }
-
-        .activity-details {
-            font-size: 12px;
-            color: #6b7280;
-        }
-
-        .activity-time {
-            font-size: 12px;
-            color: #9ca3af;
-        }
-
-        /* Department Stats */
-        .dept-stats {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .dept-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px;
-            border-radius: 8px;
-            background: #f9fafb;
-        }
-
-        .dept-name {
-            font-weight: 500;
-            color: #374151;
-        }
-
-        .dept-progress {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-
-        .progress-bar {
-            width: 100px;
-            height: 8px;
-            background: #e5e7eb;
-            border-radius: 4px;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: #4f46e5;
-            border-radius: 4px;
-        }
-
-        .progress-text {
-            font-size: 12px;
-            color: #6b7280;
-            min-width: 40px;
-            text-align: right;
-        }
-
-        /* Top Students */
-        .top-students-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .student-item {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            padding: 10px;
-            border-radius: 8px;
-            background: #f9fafb;
-        }
-
-        .student-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #4f46e5, #8b5cf6);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            font-size: 16px;
-        }
-
-        .student-info {
-            flex: 1;
-        }
-
-        .student-name {
-            font-weight: 500;
-            color: #111827;
-            margin-bottom: 2px;
-        }
-
-        .student-details {
-            font-size: 12px;
-            color: #6b7280;
-        }
-
-        .student-score {
-            font-weight: 600;
-            color: #10b981;
-        }
-
-        /* Quick Actions */
-        .quick-actions-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin-top: 20px;
-        }
-
-        .quick-action {
-            padding: 20px;
-            background: #f9fafb;
-            border-radius: 10px;
-            text-align: center;
-            text-decoration: none;
-            color: #374151;
-            transition: all 0.2s;
-            display: block;
-        }
-
-        .quick-action:hover {
-            background: #e5e7eb;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-
-        .quick-action i {
-            font-size: 24px;
-            margin-bottom: 10px;
-            display: block;
-            color: #4f46e5;
-        }
-
-        .quick-action span {
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        /* Goal Status Distribution */
-        .status-distribution {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .status-item {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            padding: 10px;
-            border-radius: 8px;
-        }
-
-        .status-count {
-            font-weight: 600;
-            color: #111827;
-            min-width: 30px;
-        }
-
-        .status-label {
-            flex: 1;
-            font-size: 14px;
-        }
-
-        .status-bar {
-            width: 100px;
-            height: 8px;
-            background: #e5e7eb;
-            border-radius: 4px;
-            overflow: hidden;
-        }
-
-        .status-fill {
-            height: 100%;
-            border-radius: 4px;
-        }
-
-        .status-completed .status-fill { background: #10b981; }
-        .status-in-progress .status-fill { background: #3b82f6; }
-        .status-pending .status-fill { background: #f59e0b; }
-        .status-overdue .status-fill { background: #ef4444; }
-
-        .status-percentage {
-            font-size: 12px;
-            color: #6b7280;
-            min-width: 40px;
-            text-align: right;
-        }
-
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: #6b7280;
-        }
-
-        .empty-state i {
-            font-size: 24px;
-            margin-bottom: 10px;
-        }
-
-        /* Reuse styles from previous pages */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        
-        .stat-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            text-align: center;
-        }
-        
-        .stat-number {
-            font-size: 28px;
-            font-weight: 700;
-            color: #111827;
-        }
-        
-        .stat-label {
-            font-size: 14px;
-            color: #6b7280;
-        }
-        
-        .filters-section {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-        
-        .filter-row {
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-            align-items: flex-end;
-        }
-        
-        .filter-group {
-            flex: 1;
-            min-width: 200px;
-        }
-        
-        .report-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            margin-bottom: 30px;
-        }
-        
-        .report-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        .report-table th {
-            background: #f9fafb;
-            padding: 15px;
-            text-align: left;
-            border-bottom: 1px solid #e5e7eb;
-        }
-        
-        .report-table td {
-            padding: 15px;
-            border-bottom: 1px solid #f3f4f6;
-        }
-        
-        .student-select {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #d1d5db;
-            border-radius: 8px;
-        }
-        
-        .student-report {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-        }
-        
-        .student-info {
-            margin-bottom: 20px;
-        }
-        
-        .student-stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        
-        .student-stat {
-            background: #f9fafb;
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-        }
-        
-        .student-stat .stat-number {
-            font-size: 24px;
-            font-weight: 700;
-        }
-        
-        .student-stat .stat-label {
-            font-size: 12px;
-            color: #6b7280;
-        }
+ :root{
+  --bg0:#070A18;
+  --bg1:#0B1030;
+
+  --text:#EAF0FF;
+  --muted: rgba(234,240,255,.65);
+  --muted2: rgba(234,240,255,.50);
+
+  --primary:#7C3AED;
+  --primary-light: rgba(124,58,237,.14);
+
+  --cyan:#22D3EE;
+  --pink:#FB7185;
+
+  --success:#34D399;
+  --warning:#FBBF24;
+  --danger:#FB7185;
+  --info:#22D3EE;
+
+  --gray-500: rgba(234,240,255,.60);
+
+  --success-light: rgba(52,211,153,.12);
+  --info-light: rgba(34,211,238,.12);
+  --danger-light: rgba(251,113,133,.12);
+
+  --border: rgba(255,255,255,.10);
+  --border2: rgba(255,255,255,.08);
+
+  --r12: 12px;
+  --r14: 14px;
+  --r16: 16px;
+  --r20: 20px;
+
+  --shadow: 0 18px 45px rgba(0,0,0,.35);
+  --shadow2: 0 10px 30px rgba(0,0,0,.22);
+}
+
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  margin:0;
+  color: var(--text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background:
+    radial-gradient(900px 520px at 18% 10%, rgba(124,58,237,.24), transparent 60%),
+    radial-gradient(900px 520px at 88% 15%, rgba(34,211,238,.18), transparent 58%),
+    radial-gradient(900px 520px at 70% 95%, rgba(251,113,133,.14), transparent 62%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+  overflow-x:hidden;
+}
+a{ color:inherit; text-decoration:none; }
+
+.mobile-toggle{
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 2000;
+  width: 44px;
+  height: 44px;
+  display: none;
+  place-items: center;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(10,14,35,.60);
+  color: var(--text);
+  box-shadow: var(--shadow2);
+  backdrop-filter: blur(12px);
+  cursor:pointer;
+}
+.mobile-toggle i{ font-size: 18px; }
+
+.dashboard-wrapper{
+  display:grid;
+  grid-template-columns: 320px 1fr;
+  min-height:100vh;
+}
+
+.sidebar{
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  display:flex;
+  flex-direction: column;
+  padding: 18px 16px 16px;
+  background:
+    radial-gradient(700px 320px at 20% 0%, rgba(124,58,237,.22), transparent 60%),
+    radial-gradient(520px 300px at 100% 20%, rgba(34,211,238,.15), transparent 60%),
+    linear-gradient(180deg, rgba(10,14,35,.85), rgba(10,14,35,.62));
+  border-right: 1px solid rgba(255,255,255,.10);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 10px 50px rgba(0,0,0,.25);
+}
+.sidebar::before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  background: linear-gradient(120deg, rgba(124,58,237,.22), rgba(34,211,238,.16), rgba(251,113,133,.14));
+  opacity:.22;
+  filter: blur(26px);
+  pointer-events:none;
+  z-index:0;
+}
+.sidebar-header,
+.user-profile,
+.nav-menu,
+.sidebar-quick-stats,
+.sidebar-footer{ position:relative; z-index:2; }
+
+.sidebar-header{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  padding: 10px 10px 14px;
+  flex: 0 0 auto;
+}
+.logo{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  font-weight: 900;
+  letter-spacing: .2px;
+  font-size: 18px;
+}
+.logo i{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(124,58,237,.70), rgba(34,211,238,.35));
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 14px 30px rgba(124,58,237,.18);
+}
+.sidebar-close{
+  display:none;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  cursor:pointer;
+}
+
+.user-profile{
+  display:flex;
+  gap: 12px;
+  padding: 14px 12px;
+  border-radius: var(--r16);
+  border: 1px solid var(--border2);
+  background:
+    radial-gradient(140% 180% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: 0 12px 26px rgba(0,0,0,.18);
+  flex: 0 0 auto;
+}
+.profile-pic{
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: 0 10px 20px rgba(0,0,0,.22);
+}
+.profile-pic.default{
+  display:grid;
+  place-items:center;
+  font-weight: 950;
+  font-size: 18px;
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.55), rgba(124,58,237,.55));
+}
+.user-info h4{ margin: 2px 0 2px; font-size: 15px; font-weight: 900; }
+.user-info p{
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 210px;
+}
+
+.nav-menu{
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 6px 10px;
+  margin-top: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,.18) transparent;
+}
+.nav-menu::-webkit-scrollbar{ width: 8px; }
+.nav-menu::-webkit-scrollbar-track{ background: transparent; }
+.nav-menu::-webkit-scrollbar-thumb{ background: rgba(255,255,255,.16); border-radius: 99px; }
+.nav-menu::-webkit-scrollbar-thumb:hover{ background: rgba(255,255,255,.22); }
+
+.nav-link{
+  position: relative;
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  color: rgba(234,240,255,.90);
+  border: 1px solid transparent;
+  transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  min-height: 46px;
+}
+.nav-link i{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 12px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.10);
+}
+.nav-link:hover{
+  background: rgba(255,255,255,.06);
+  border-color: rgba(255,255,255,.12);
+  transform: translateX(2px);
+}
+.nav-link.active{
+  background:
+    radial-gradient(120% 160% at 10% 20%, rgba(255,255,255,.14), transparent 55%),
+    linear-gradient(135deg, rgba(124,58,237,.55), rgba(34,211,238,.20));
+  border-color: rgba(255,255,255,.18);
+  box-shadow: 0 18px 40px rgba(124,58,237,.20);
+}
+.badge{
+  margin-left:auto;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--text);
+  background:
+    radial-gradient(120% 180% at 20% 20%, rgba(255,255,255,.20), transparent 55%),
+    linear-gradient(135deg, rgba(251,113,133,.70), rgba(124,58,237,.45));
+  border: 1px solid rgba(255,255,255,.18);
+  flex: 0 0 auto;
+}
+
+.sidebar-quick-stats{
+  flex: 0 0 auto;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: var(--r16);
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+}
+.sidebar-stat{
+  display:flex;
+  gap: 12px;
+  align-items:center;
+  padding: 10px;
+  border-radius: 14px;
+  transition: background .18s ease;
+}
+.sidebar-stat:hover{ background: rgba(255,255,255,.04); }
+.sidebar-stat-icon{
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  display:grid;
+  place-items:center;
+  border: 1px solid rgba(255,255,255,.12);
+  background:
+    radial-gradient(120% 180% at 20% 10%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.35), rgba(124,58,237,.35));
+  box-shadow: 0 14px 26px rgba(0,0,0,.18);
+}
+.sidebar-stat-info{ display:flex; flex-direction:column; gap:2px; }
+.sidebar-stat-label{ font-size: 12px; color: var(--muted); }
+.sidebar-stat-number{ font-size: 18px; font-weight: 950; letter-spacing: .2px; }
+
+.sidebar-footer{ flex: 0 0 auto; margin-top: 12px; }
+.logout-btn{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap: 10px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,.14);
+  background:
+    radial-gradient(140% 180% at 20% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(135deg, rgba(251,113,133,.20), rgba(255,255,255,.03));
+  box-shadow: 0 14px 26px rgba(0,0,0,.16);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.logout-btn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 18px 34px rgba(251,113,133,.18);
+}
+
+.main-content{ padding: 26px 26px 40px; }
+
+.page-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 18px;
+  border-radius: var(--r20);
+  border: 1px solid rgba(255,255,255,.10);
+  background:
+    radial-gradient(120% 220% at 15% 10%, rgba(255,255,255,.10), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: var(--shadow2);
+}
+.header-content h1{
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 950;
+  letter-spacing: .2px;
+}
+.header-content p{ margin:0; color: var(--muted); font-size: 14px; }
+
+.alert{
+  margin-top: 16px;
+  display:flex;
+  align-items:flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.04);
+  box-shadow: var(--shadow2);
+}
+.alert i{ margin-top:2px; }
+.alert span{ color: rgba(234,240,255,.92); font-weight: 650; }
+.alert-success{
+  border-color: rgba(52,211,153,.22);
+  background: linear-gradient(180deg, rgba(52,211,153,.10), rgba(255,255,255,.03));
+}
+.alert-success i{ color: var(--success); }
+.alert-error{
+  border-color: rgba(251,113,133,.22);
+  background: linear-gradient(180deg, rgba(251,113,133,.10), rgba(255,255,255,.03));
+}
+.alert-error i{ color: var(--danger); }
+
+.settings-section{
+  margin-top: 16px;
+  border-radius: var(--r20);
+  border: 1px solid rgba(255,255,255,.10);
+  background:
+    radial-gradient(140% 220% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: var(--shadow);
+  padding: 16px;
+}
+.settings-section h3{
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 950;
+  letter-spacing: .2px;
+  display:flex;
+  align-items:center;
+  gap: 10px;
+}
+.settings-section h3 i{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05);
+}
+
+.profile-preview{
+  display:flex;
+  gap: 14px;
+  align-items:center;
+  padding: 12px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.03);
+  margin-bottom: 14px;
+}
+.profile-pic-large{
+  width: 84px;
+  height: 84px;
+  border-radius: 22px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: 0 16px 30px rgba(0,0,0,.22);
+}
+.profile-pic-large.default{
+  display:grid;
+  place-items:center;
+  font-weight: 950;
+  font-size: 26px;
+  color: var(--text);
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.45), rgba(124,58,237,.55));
+}
+
+.form-row{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.form-group{ margin-bottom: 14px; }
+.form-group label{
+  display:block;
+  font-size: 13px;
+  font-weight: 800;
+  color: rgba(234,240,255,.86);
+  margin-bottom: 6px;
+}
+.form-group input{
+  width:100%;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.18);
+  color: var(--text);
+  outline: none;
+  transition: box-shadow .18s ease, border-color .18s ease, background .18s ease;
+}
+.form-group input::placeholder{ color: rgba(234,240,255,.45); }
+.form-group input:focus{
+  border-color: rgba(34,211,238,.35);
+  box-shadow: 0 0 0 3px rgba(34,211,238,.18);
+  background: rgba(0,0,0,.22);
+}
+
+.btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-weight: 900;
+  border: 1px solid rgba(255,255,255,.14);
+  color: var(--text);
+  background: rgba(255,255,255,.05);
+  transition: transform .18s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease;
+  cursor:pointer;
+}
+.btn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 12px 30px rgba(124,58,237,.18);
+  background: rgba(255,255,255,.07);
+}
+.btn-primary{
+  background:
+    radial-gradient(120% 180% at 20% 10%, rgba(255,255,255,.16), transparent 55%),
+    linear-gradient(135deg, rgba(124,58,237,.55), rgba(34,211,238,.18));
+}
+.btn-outline{
+  background: rgba(255,255,255,.04);
+}
+
+.upload-label{ cursor:pointer; }
+
+.password-form .form-group{ max-width: 560px; }
+
+@media (max-width: 860px){
+  .dashboard-wrapper{ grid-template-columns: 1fr; }
+  .mobile-toggle{ display:grid; }
+
+  .sidebar{
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 320px;
+    transform: translateX(-105%);
+    transition: transform .25s ease;
+    z-index: 1601;
+  }
+  .sidebar.active{ transform: translateX(0); }
+  .sidebar-close{ display:grid; }
+
+  .main-content{ padding: 22px 16px 36px; }
+  .page-header{ flex-direction: column; align-items: flex-start; }
+  .form-row{ grid-template-columns: 1fr; }
+  .profile-preview{ flex-direction: column; align-items: flex-start; }
+}
+
+@media (max-width: 520px){
+  .user-info p{ max-width: 160px; }
+}
+
+a:focus, button:focus{ outline: none; }
+a:focus-visible, button:focus-visible{
+  box-shadow: 0 0 0 3px rgba(34,211,238,.25), 0 0 0 1px rgba(255,255,255,.10);
+  border-radius: 14px;
+}
+
     </style>
 </head>
+
 <body>
     <!-- Mobile Menu Toggle -->
     <button class="mobile-toggle" id="sidebarToggle">
         <i class="fas fa-bars"></i>
     </button>
-    
+
     <div class="dashboard-wrapper">
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
@@ -926,50 +675,51 @@ $sidebar_stats = [
             </div>
 
             <nav class="nav-menu">
-                <a href="admin.php" class="nav-link">
-                    <i class="fas fa-tachometer-alt"></i>
-                    <span>Dashboard</span>
+                <a href="admin.php" class="nav-link <?php echo $current === 'admin.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tachometer-alt"></i> Dashboard
                 </a>
-                <a href="students.php" class="nav-link">
-                    <i class="fas fa-users"></i>
-                    <span>Students</span>
-                    <?php if ($sidebar_stats['students'] > 0): ?>
-                        <span class="badge"><?php echo $sidebar_stats['students']; ?></span>
-                    <?php endif; ?>
+
+                <a href="students.php" class="nav-link <?php echo $current === 'students.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-users"></i> Students
+                    <?php if ($students_count > 0): ?><span class="badge"><?php echo $students_count; ?></span><?php endif; ?>
                 </a>
-                <a href="goals.php" class="nav-link">
-                    <i class="fas fa-bullseye"></i>
-                    <span>System Goals</span>
-                    <?php if ($sidebar_stats['goals'] > 0): ?>
-                        <span class="badge"><?php echo $sidebar_stats['goals']; ?></span>
-                    <?php endif; ?>
+
+                <a href="goals.php" class="nav-link <?php echo $current === 'goals.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bullseye"></i> All Goals
+                    <?php if ($goals_count > 0): ?><span class="badge"><?php echo $goals_count; ?></span><?php endif; ?>
                 </a>
-                <a href="assign_goals.php" class="nav-link">
-                    <i class="fas fa-tasks"></i>
-                    <span>Assign Goals</span>
-                    <?php if ($sidebar_stats['assigned'] > 0): ?>
-                        <span class="badge"><?php echo $sidebar_stats['assigned']; ?></span>
-                    <?php endif; ?>
+
+                <a href="assign_goals.php" class="nav-link <?php echo $current === 'assign_goals.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tasks"></i> Assign Goals
+                    <?php if ($assigned_count > 0): ?><span class="badge"><?php echo $assigned_count; ?></span><?php endif; ?>
                 </a>
-                <a href="achievements.php" class="nav-link">
-                    <i class="fas fa-trophy"></i>
-                    <span>Achievements</span>
-                    <?php if ($sidebar_stats['points'] > 0): ?>
-                        <span class="badge"><?php echo $sidebar_stats['points']; ?> pts</span>
-                    <?php endif; ?>
+
+                <!-- ✅ Progress Requests nav link -->
+                <a href="progress_requests.php" class="nav-link <?php echo $current === 'progress_requests.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-check-double"></i> Progress Requests
+                    <?php if ($pending_requests > 0): ?><span class="badge"><?php echo $pending_requests; ?></span><?php endif; ?>
                 </a>
-                <a href="reports.php" class="nav-link">
-                    <i class="fas fa-chart-bar"></i>
-                    <span>Reports</span>
+
+                <a href="achievements.php" class="nav-link <?php echo $current === 'achievements.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-trophy"></i> Achievements
+                    <?php if ($points_count > 0): ?><span class="badge"><?php echo $points_count; ?> pts</span><?php endif; ?>
                 </a>
-                <a href="notifications.php" class="nav-link">
-                    <i class="fas fa-bell"></i>
-                    <span>Notifications</span>
+
+                <a href="reports.php" class="nav-link <?php echo $current === 'reports.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-chart-bar"></i> Reports
                 </a>
-                <a href="categories.php" class="nav-link active"><i class="fas fa-tags"></i> Categories</a>
-                <a href="settings.php" class="nav-link active">
-                    <i class="fas fa-cog"></i>
-                    <span>Settings</span>
+
+                <a href="notifications.php" class="nav-link <?php echo $current === 'notifications.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bell"></i> Notifications
+                </a>
+
+                <!-- IMPORTANT: Only ONE active class at a time (you had Categories active also in goals.php) -->
+                <a href="categories.php" class="nav-link <?php echo $current === 'categories.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tags"></i> Categories
+                </a>
+
+                <a href="settings.php" class="nav-link <?php echo $current === 'settings.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-cog"></i> Settings
                 </a>
             </nav>
 
@@ -1010,7 +760,7 @@ $sidebar_stats = [
                 </a>
             </div>
         </aside>
-        
+
         <!-- Main Content -->
         <main class="main-content">
             <header class="page-header">
@@ -1019,27 +769,27 @@ $sidebar_stats = [
                     <p>Manage your account settings</p>
                 </div>
             </header>
-            
+
             <?php if ($success): ?>
                 <div class="alert alert-success">
                     <i class="fas fa-check-circle"></i>
                     <span><?php echo htmlspecialchars($success); ?></span>
                 </div>
             <?php endif; ?>
-            
+
             <?php if ($error): ?>
                 <div class="alert alert-error">
                     <i class="fas fa-exclamation-circle"></i>
                     <span><?php echo htmlspecialchars($error); ?></span>
                 </div>
             <?php endif; ?>
-            
+
             <!-- Profile Settings -->
             <div class="settings-section">
                 <h3><i class="fas fa-user-edit"></i> Update Profile</h3>
                 <form method="POST" enctype="multipart/form-data">
                     <input type="hidden" name="action" value="update_profile">
-                    
+
                     <div class="profile-preview">
                         <?php if (!empty($admin['profile_picture'])): ?>
                             <img src="../<?php echo htmlspecialchars($admin['profile_picture']); ?>" alt="Profile" class="profile-pic-large">
@@ -1056,54 +806,54 @@ $sidebar_stats = [
                             <p style="font-size: 12px; color: #6b7280; margin-top: 5px;">Recommended size: 200x200px. Max 2MB.</p>
                         </div>
                     </div>
-                    
+
                     <div class="form-row">
                         <div class="form-group">
                             <label for="name">Full Name</label>
                             <input type="text" id="name" name="name" required value="<?php echo htmlspecialchars($admin['name']); ?>">
                         </div>
-                        
+
                         <div class="form-group">
                             <label for="email">Email Address</label>
                             <input type="email" id="email" name="email" required value="<?php echo htmlspecialchars($admin['email']); ?>">
                         </div>
                     </div>
-                    
+
                     <button type="submit" class="btn btn-primary">
                         <i class="fas fa-save"></i> Update Profile
                     </button>
                 </form>
             </div>
-            
+
             <!-- Password Change -->
             <div class="settings-section password-form">
                 <h3><i class="fas fa-lock"></i> Change Password</h3>
                 <form method="POST">
                     <input type="hidden" name="action" value="change_password">
-                    
+
                     <div class="form-group">
                         <label for="current_password">Current Password</label>
                         <input type="password" id="current_password" name="current_password" required placeholder="Enter current password">
                     </div>
-                    
+
                     <div class="form-row">
                         <div class="form-group">
                             <label for="new_password">New Password</label>
                             <input type="password" id="new_password" name="new_password" required minlength="8" placeholder="Enter new password">
                         </div>
-                        
+
                         <div class="form-group">
                             <label for="confirm_password">Confirm New Password</label>
                             <input type="password" id="confirm_password" name="confirm_password" required minlength="8" placeholder="Confirm new password">
                         </div>
                     </div>
-                    
+
                     <button type="submit" class="btn btn-primary">
                         <i class="fas fa-key"></i> Change Password
                     </button>
                 </form>
             </div>
-            
+
             <!-- System Settings -->
             <div class="settings-section">
                 <h3><i class="fas fa-cogs"></i> System Settings</h3>
@@ -1114,51 +864,62 @@ $sidebar_stats = [
             </div>
         </main>
     </div>
-    
+
     <script>
         // Mobile sidebar toggle
         const sidebarToggle = document.getElementById('sidebarToggle');
         const sidebar = document.getElementById('sidebar');
         const sidebarClose = document.getElementById('sidebarClose');
-        
+
         if (sidebarToggle) {
             sidebarToggle.addEventListener('click', function() {
                 sidebar.classList.add('active');
             });
         }
-        
+
         if (sidebarClose) {
             sidebarClose.addEventListener('click', function() {
                 sidebar.classList.remove('active');
             });
         }
-        
+
         // Close sidebar when clicking outside on mobile
         document.addEventListener('click', function(event) {
             if (window.innerWidth <= 768 && sidebar.classList.contains('active') && !sidebar.contains(event.target) && !sidebarToggle.contains(event.target)) {
                 sidebar.classList.remove('active');
             }
         });
-        
+
         // Handle window resize
         window.addEventListener('resize', function() {
             if (window.innerWidth > 768 && sidebar.classList.contains('active')) {
                 sidebar.classList.remove('active');
             }
         });
-        
-        // Preview uploaded image
-        function previewImage(input) {
-            if (input.files && input.files[0]) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    const preview = document.querySelector('.profile-pic-large');
-                    preview.src = e.target.result;
-                    preview.classList.remove('default');
-                };
-                reader.readAsDataURL(input.files[0]);
-            }
-        }
+
+      function previewImage(input) {
+  if (input.files && input.files[0]) {
+    const reader = new FileReader();
+
+    reader.onload = function (e) {
+      let preview = document.querySelector('.profile-pic-large');
+
+      // if it's not an image, replace the div with an img
+      if (preview.tagName.toLowerCase() !== 'img') {
+        const img = document.createElement('img');
+        img.className = 'profile-pic-large';
+        preview.replaceWith(img);
+        preview = img;
+      }
+
+      preview.src = e.target.result;
+    };
+
+    reader.readAsDataURL(input.files[0]);
+  }
+}
+
     </script>
 </body>
+
 </html>

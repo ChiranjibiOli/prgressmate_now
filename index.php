@@ -12,6 +12,7 @@ if (isset($_SESSION['user_id'])) {
 ?>
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -21,6 +22,7 @@ if (isset($_SESSION['user_id'])) {
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
+
 <body>
     <!-- Navigation -->
     <nav class="navbar">
@@ -31,18 +33,18 @@ if (isset($_SESSION['user_id'])) {
                     <span class="logo-text">ProgressMate</span>
                 </a>
             </div>
-            
+
             <div class="navbar-menu" id="navbarMenu">
                 <a href="index.php" class="nav-link active">Home</a>
                 <a href="#about" class="nav-link">About</a>
                 <a href="#contact" class="nav-link">Contact</a>
             </div>
-            
+
             <div class="navbar-actions">
                 <a href="login.php" class="nav-link">Login</a>
                 <a href="register.php" class="btn btn-primary">Register</a>
             </div>
-            
+
             <button class="navbar-toggle" id="navbarToggle">
                 <i class="fas fa-bars"></i>
             </button>
@@ -55,7 +57,7 @@ if (isset($_SESSION['user_id'])) {
             <div class="hero-content">
                 <h1 class="hero-title">Track. <span class="highlight">Improve.</span> Succeed.</h1>
                 <p class="hero-subtitle">
-                    Your ultimate partner for goal setting, progress tracking, and academic success. 
+                    Your ultimate partner for goal setting, progress tracking, and academic success.
                     Stay motivated, organized, and ahead in your academic journey with customizable goals tailored to your needs.
                 </p>
                 <div class="hero-actions">
@@ -96,7 +98,7 @@ if (isset($_SESSION['user_id'])) {
                     ProgressMate offers customizable goal templates across key categories to help you track academic performance, build study habits, manage assignments, develop skills, and foster personal growth—all with real-time insights and achievement badges.
                 </p>
             </div>
-            
+
             <div class="features-grid">
                 <div class="feature-card">
                     <div class="feature-icon">
@@ -107,7 +109,7 @@ if (isset($_SESSION['user_id'])) {
                         Set goals to improve subjects, prepare for exams, or track attendance with weekly milestones and progress logs.
                     </p>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">
                         <i class="fas fa-book-open"></i>
@@ -117,7 +119,7 @@ if (isset($_SESSION['user_id'])) {
                         Create routines like daily study time or Pomodoro sessions, with reminders and balance for rest to prevent burnout.
                     </p>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">
                         <i class="fas fa-tasks"></i>
@@ -127,7 +129,7 @@ if (isset($_SESSION['user_id'])) {
                         Break down tasks, prioritize deadlines, and incorporate feedback with step-by-step milestones for timely completion.
                     </p>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">
                         <i class="fas fa-lightbulb"></i>
@@ -137,7 +139,7 @@ if (isset($_SESSION['user_id'])) {
                         Learn tools, improve writing, or practice public speaking with practice-based milestones and progress graphs.
                     </p>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">
                         <i class="fas fa-heart"></i>
@@ -147,7 +149,7 @@ if (isset($_SESSION['user_id'])) {
                         Incorporate wellness like exercise, meditation, or journaling, correlating with academic progress for holistic support.
                     </p>
                 </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">
                         <i class="fas fa-trophy"></i>
@@ -168,20 +170,20 @@ if (isset($_SESSION['user_id'])) {
                 <h2 class="section-title">How ProgressMate Works</h2>
                 <p class="section-subtitle">Three simple steps to transform your academic journey with customizable goals</p>
             </div>
-            
+
             <div class="steps">
                 <div class="step">
                     <div class="step-number">1</div>
                     <h3 class="step-title">Choose & Customize Goals</h3>
                     <p class="step-description">Select from templates in categories like academic or wellness, and tailor to your needs with personal data.</p>
                 </div>
-                
+
                 <div class="step">
                     <div class="step-number">2</div>
                     <h3 class="step-title">Track & Update Progress</h3>
                     <p class="step-description">Log daily actions, hit milestones, and see real-time updates with graphs and reminders.</p>
                 </div>
-                
+
                 <div class="step">
                     <div class="step-number">3</div>
                     <h3 class="step-title">Earn Achievements</h3>
@@ -198,7 +200,7 @@ if (isset($_SESSION['user_id'])) {
                 <h2 class="section-title">What Students Say</h2>
                 <p class="section-subtitle">Join thousands of students who transformed their academic journey</p>
             </div>
-            
+
             <div class="testimonials-grid">
                 <div class="testimonial-card">
                     <div class="testimonial-content">
@@ -212,7 +214,7 @@ if (isset($_SESSION['user_id'])) {
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="testimonial-card">
                     <div class="testimonial-content">
                         <p>"The study habits templates like Pomodoro kept me focused, and the badges made it fun to track my progress daily."</p>
@@ -225,7 +227,7 @@ if (isset($_SESSION['user_id'])) {
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="testimonial-card">
                     <div class="testimonial-content">
                         <p>"Assignment management goals helped me break down projects and meet deadlines—earning badges felt rewarding!"</p>
@@ -256,43 +258,43 @@ if (isset($_SESSION['user_id'])) {
         </div>
     </section>
 
-   <!-- Contact Section -->
-<section id="contact" class="section contact">
-    <div class="container">
-        <div class="section-header">
-            <h2 class="section-title">Contact Us</h2>
-            <p class="section-subtitle">Get in touch for support, feedback, or inquiries</p>
+    <!-- Contact Section -->
+    <section id="contact" class="section contact">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Contact Us</h2>
+                <p class="section-subtitle">Get in touch for support, feedback, or inquiries</p>
+            </div>
+
+            <?php
+            if (isset($_GET['success'])) {
+                echo '<p class="success-message">' . htmlspecialchars($_GET['success']) . '</p>';
+            }
+            if (isset($_GET['error'])) {
+                echo '<p class="error-message">' . htmlspecialchars($_GET['error']) . '</p>';
+            }
+            ?>
+            <form class="contact-form" action="contact.php" method="POST">
+                <div class="form-group">
+                    <label for="name">Name</label>
+                    <input type="text" id="name" name="name" required>
+                </div>
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="subject">Subject</label>
+                    <input type="text" id="subject" name="subject">
+                </div>
+                <div class="form-group">
+                    <label for="message">Message</label>
+                    <textarea id="message" name="message" rows="5" required></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">Send Message</button>
+            </form>
         </div>
-        
-<?php
-if (isset($_GET['success'])) {
-    echo '<p class="success-message">' . htmlspecialchars($_GET['success']) . '</p>';
-}
-if (isset($_GET['error'])) {
-    echo '<p class="error-message">' . htmlspecialchars($_GET['error']) . '</p>';
-}
-?>
-        <form class="contact-form" action="contact.php" method="POST">
-            <div class="form-group">
-                <label for="name">Name</label>
-                <input type="text" id="name" name="name" required>
-            </div>
-            <div class="form-group">
-                <label for="email">Email</label>
-                <input type="email" id="email" name="email" required>
-            </div>
-            <div class="form-group">
-                <label for="subject">Subject</label>
-                <input type="text" id="subject" name="subject">
-            </div>
-            <div class="form-group">
-                <label for="message">Message</label>
-                <textarea id="message" name="message" rows="5" required></textarea>
-            </div>
-            <button type="submit" class="btn btn-primary">Send Message</button>
-        </form>
-    </div>
-</section>
+    </section>
 
     <!-- CTA Section -->
     <section class="section cta">
@@ -333,7 +335,7 @@ if (isset($_GET['error'])) {
                         <a href="#" class="social-link"><i class="fab fa-github"></i></a>
                     </div>
                 </div>
-                
+
                 <div class="footer-section">
                     <h4 class="footer-heading">Product</h4>
                     <a href="dashboard.php" class="footer-link">Dashboard</a>
@@ -341,7 +343,7 @@ if (isset($_GET['error'])) {
                     <a href="achievements.php" class="footer-link">Achievements</a>
                     <a href="profile.php" class="footer-link">Profile</a>
                 </div>
-                
+
                 <div class="footer-section">
                     <h4 class="footer-heading">Company</h4>
                     <a href="#about" class="footer-link">About Us</a>
@@ -349,7 +351,7 @@ if (isset($_GET['error'])) {
                     <a href="#" class="footer-link">Blog</a>
                     <a href="#contact" class="footer-link">Contact Us</a>
                 </div>
-                
+
                 <div class="footer-section">
                     <h4 class="footer-heading">Resources</h4>
                     <a href="#" class="footer-link">Help Center</a>
@@ -359,7 +361,7 @@ if (isset($_GET['error'])) {
                     <a href="#" class="footer-link">Terms of Service</a>
                 </div>
             </div>
-            
+
             <div class="footer-bottom">
                 <p>&copy; 2024 ProgressMate. All rights reserved.</p>
                 <div class="footer-links-bottom">
@@ -373,4 +375,5 @@ if (isset($_GET['error'])) {
     </footer>
     <script src="assets/js/main.js"></script>
 </body>
+
 </html>

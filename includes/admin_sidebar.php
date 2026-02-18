@@ -39,7 +39,7 @@
         <a href="students.php" class="nav-link <?php echo basename($_SERVER['PHP_SELF']) == 'students.php' ? 'active' : ''; ?>">
             <i class="fas fa-users"></i>
             <span>Students</span>
-            <?php 
+            <?php
             $total_students = getStat($pdo, "SELECT COUNT(*) FROM users WHERE role = 'student' AND status = 'active'");
             if ($total_students > 0): ?>
                 <span class="badge"><?php echo $total_students; ?></span>
@@ -48,7 +48,7 @@
         <a href="goals.php" class="nav-link <?php echo basename($_SERVER['PHP_SELF']) == 'goals.php' ? 'active' : ''; ?>">
             <i class="fas fa-bullseye"></i>
             <span>System Goals</span>
-            <?php 
+            <?php
             $total_goals = getStat($pdo, "SELECT COUNT(*) FROM admin_goals WHERE status = 'active'");
             if ($total_goals > 0): ?>
                 <span class="badge"><?php echo $total_goals; ?></span>
@@ -96,7 +96,7 @@
 
     <!-- Logout -->
     <div class="sidebar-footer">
-        <a href="../student/dashboard.php"" class="btn btn-outline" style="margin-bottom: 10px; text-align: center; display: block;">
+        <a href="../student/dashboard.php"" class=" btn btn-outline" style="margin-bottom: 10px; text-align: center; display: block;">
             <i class="fas fa-user"></i> Student View
         </a>
         <a href="../logout.php" class="logout-btn">

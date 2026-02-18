@@ -75,10 +75,38 @@ $categories = $pdo->query("
     WHERE deleted_at IS NULL 
     ORDER BY name ASC
 ")->fetchAll(PDO::FETCH_ASSOC);
+
+$current = basename($_SERVER['PHP_SELF']);
+
+// === Sidebar Stats (REAL) ===
+$total_students = (int)($pdo->query("SELECT COUNT(*) FROM users WHERE role='student'")->fetchColumn() ?? 0);
+$total_goals    = (int)($pdo->query("SELECT COUNT(*) FROM admin_goals")->fetchColumn() ?? 0);
+$total_points   = (int)($pdo->query("SELECT COALESCE(SUM(points),0) FROM users WHERE role='student'")->fetchColumn() ?? 0);
+
+$sidebar_stats = [
+    'students' => $total_students,
+    'goals'    => $total_goals,
+    'assigned' => 0,
+    'points'   => $total_points
+];
+$students_count = (int)($sidebar_stats['students'] ?? 0);
+$goals_count    = (int)($sidebar_stats['goals'] ?? 0);
+$assigned_count = (int)($sidebar_stats['assigned'] ?? 0);
+$points_count   = (int)($sidebar_stats['points'] ?? 0);
+
+
+// If you have progress requests table, show pending badge (safe if table exists)
+$pending_requests = 0;
+try {
+    $pending_requests = (int)$pdo->query("SELECT COUNT(*) FROM progress_requests WHERE status='pending'")->fetchColumn();
+} catch (Exception $e) {
+    $pending_requests = 0;
+}
 ?>
 
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -86,168 +114,544 @@ $categories = $pdo->query("
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --primary: #4f46e5;
-            --primary-dark: #4338ca;
-            --success: #10b981;
-            --warning: #f59e0b;
-            --danger: #ef4444;
-            --info: #3b82f6;
-            --purple: #8b5cf6;
-            --gold: #fbbf24;
-            --silver: #9ca3af;
-            --bronze: #f97316;
-            --gray-100: #f9fafb;
-            --gray-200: #f3f4f6;
-            --gray-300: #e5e7eb;
-            --gray-400: #9ca3af;
-            --gray-500: #6b7280;
-            --gray-700: #374151;
-            --gray-900: #111827;
-            --shadow-sm: 0 1px 3px rgba(0,0,0,0.1);
-            --shadow: 0 4px 12px rgba(0,0,0,0.08);
-            --radius: 12px;
-            --transition: all 0.3s ease;
+:root{
+  --bg0:#070A18;
+  --bg1:#0B1030;
 
-            /* Light background shades for system status cards */
-            --success-light: #ecfdf5;
-            --info-light: #eff6ff;
-            --purple-light: #f3e8ff;
-        }
+  --text:#EAF0FF;
+  --muted: rgba(234,240,255,.65);
+  --muted2: rgba(234,240,255,.50);
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background: var(--gray-100); color: var(--gray-900); line-height: 1.6; }
-        a { text-decoration: none; }
+  --primary:#7C3AED;
+  --primary-light: rgba(124,58,237,.14);
 
-        .dashboard-wrapper { display: flex; min-height: 100vh; position: relative; }
-        
-        .sidebar {
-            width: 280px;
-            background: white;
-            border-right: 1px solid var(--gray-300);
-            position: fixed;
-            height: 100vh;
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            transition: var(--transition);
-            box-shadow: var(--shadow);
-        }
+  --cyan:#22D3EE;
+  --pink:#FB7185;
 
-        .sidebar-header { padding: 24px 20px; border-bottom: 1px solid var(--gray-300); display: flex; align-items: center; justify-content: space-between; }
-        .logo { font-size: 20px; font-weight: 700; color: var(--primary); display: flex; align-items: center; gap: 10px; }
-        .sidebar-close { display: none; background: none; border: none; font-size: 20px; color: var(--gray-500); cursor: pointer; }
+  --success:#34D399;
+  --warning:#FBBF24;
+  --danger:#FB7185;
+  --info:#22D3EE;
 
-        .user-profile { padding: 24px 20px; border-bottom: 1px solid var(--gray-300); display: flex; align-items: center; gap: 15px; }
-        .profile-pic { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; border: 3px solid var(--gray-300); }
-        .profile-pic.default { background: linear-gradient(135deg, var(--primary), var(--purple)); color: white; font-size: 24px; font-weight: bold; display: flex; align-items: center; justify-content: center; }
+  --gray-500: rgba(234,240,255,.60);
 
-        .nav-menu { flex: 1; padding: 16px 0; overflow-y: auto; }
-        .nav-link { display: flex; align-items: center; gap: 12px; padding: 14px 20px; color: var(--gray-700); transition: var(--transition); }
-        .nav-link:hover { background: var(--gray-200); color: var(--primary); }
-        .nav-link.active { background: #eef2ff; color: var(--primary); border-left: 4px solid var(--primary); font-weight: 600; }
-        .badge { margin-left: auto; background: var(--primary); color: white; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+  --success-light: rgba(52,211,153,.12);
+  --info-light: rgba(34,211,238,.12);
+  --danger-light: rgba(251,113,133,.12);
 
-        .sidebar-quick-stats { padding: 20px; border-top: 1px solid var(--gray-300); }
-        .sidebar-stat { display: flex; align-items: center; gap: 15px; margin-bottom: 16px; }
-        .sidebar-stat-icon { width: 44px; height: 44px; border-radius: 10px; background: #eef2ff; color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 20px; }
-        .sidebar-stat-label { font-size: 13px; color: var(--gray-500); }
-        .sidebar-stat-number { font-size: 18px; font-weight: 700; }
+  --border: rgba(255,255,255,.10);
+  --border2: rgba(255,255,255,.08);
 
-        .sidebar-footer { padding: 20px; }
-        .logout-btn { display: flex; align-items: center; gap: 12px; padding: 14px 20px; background: #fee2e2; color: #dc2626; border-radius: 10px; width: 100%; font-weight: 500; transition: var(--transition); }
+  --card: rgba(255,255,255,.05);
+  --card2: rgba(255,255,255,.035);
 
-        .main-content { flex: 1; margin-left: 280px; padding: 32px; transition: var(--transition); }
+  --r12: 12px;
+  --r14: 14px;
+  --r16: 16px;
+  --r20: 20px;
 
-        .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; flex-wrap: wrap; gap: 16px; }
-        .header-content h1 { font-size: 30px; font-weight: 700; }
-        .header-content p { color: var(--gray-500); margin-top: 8px; }
+  --shadow: 0 18px 45px rgba(0,0,0,.35);
+  --shadow2: 0 10px 30px rgba(0,0,0,.22);
+}
 
-        .btn { padding: 12px 24px; border-radius: 10px; font-weight: 500; cursor: pointer; border: none; transition: var(--transition); display: inline-flex; align-items: center; gap: 8px; font-size: 15px; }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-primary:hover { background: var(--primary-dark); }
-        .btn-outline { background: white; color: var(--primary); border: 1px solid var(--primary); }
-        .btn-outline:hover { background: var(--primary); color: white; }
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-danger:hover { background: #dc2626; }
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+body{
+  margin:0;
+  color: var(--text);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background:
+    radial-gradient(900px 520px at 18% 10%, rgba(124,58,237,.24), transparent 60%),
+    radial-gradient(900px 520px at 88% 15%, rgba(34,211,238,.18), transparent 58%),
+    radial-gradient(900px 520px at 70% 95%, rgba(251,113,133,.14), transparent 62%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+  overflow-x:hidden;
+}
+a{ color:inherit; text-decoration:none; }
 
-        .alert-success { background: var(--success-light); color: var(--success); padding: 16px; border-radius: var(--radius); margin-bottom: 24px; border-left: 5px solid var(--success); }
-        .alert-error { background: var(--danger-light); color: var(--danger); padding: 16px; border-radius: var(--radius); margin-bottom: 24px; border-left: 5px solid var(--danger); }
+.mobile-toggle{
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 2000;
+  width: 44px;
+  height: 44px;
+  display: none;
+  place-items: center;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(10,14,35,.60);
+  color: var(--text);
+  box-shadow: var(--shadow2);
+  backdrop-filter: blur(12px);
+  cursor:pointer;
+}
+.mobile-toggle i{ font-size: 18px; }
 
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 24px; }
-        .card { background: white; border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); }
+.sidebar-overlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(2,6,23,.55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s ease;
+  z-index: 1500;
+}
+.sidebar-overlay.active{
+  opacity: 1;
+  pointer-events: auto;
+}
 
-        .category-tag { 
-            display: inline-flex; 
-            align-items: center; 
-            gap: 8px; 
-            padding: 8px 16px; 
-            border-radius: 20px; 
-            color: white; 
-            font-weight: 600; 
-            margin-bottom: 12px; 
-        }
+.dashboard-wrapper{
+  display:grid;
+  grid-template-columns: 320px 1fr;
+  min-height:100vh;
+}
 
-        .modal { 
-            display: none; 
-            position: fixed; 
-            inset: 0; 
-            background: rgba(0,0,0,0.5); 
-            align-items: center; 
-            justify-content: center; 
-            z-index: 1000; 
-        }
-        .modal.active { display: flex; }
-        .modal-content { 
-            background: white; 
-            border-radius: var(--radius); 
-            width: 100%; 
-            max-width: 500px; 
-            padding: 32px; 
-            box-shadow: var(--shadow); 
-        }
+.sidebar{
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  display:flex;
+  flex-direction: column;
+  padding: 18px 16px 16px;
+  background:
+    radial-gradient(700px 320px at 20% 0%, rgba(124,58,237,.22), transparent 60%),
+    radial-gradient(520px 300px at 100% 20%, rgba(34,211,238,.15), transparent 60%),
+    linear-gradient(180deg, rgba(10,14,35,.85), rgba(10,14,35,.62));
+  border-right: 1px solid rgba(255,255,255,.10);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 10px 50px rgba(0,0,0,.25);
+}
+.sidebar::before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  background: linear-gradient(120deg, rgba(124,58,237,.22), rgba(34,211,238,.16), rgba(251,113,133,.14));
+  opacity:.22;
+  filter: blur(26px);
+  pointer-events:none;
+  z-index:0;
+}
+.sidebar-header,
+.user-profile,
+.nav-menu,
+.sidebar-quick-stats,
+.sidebar-footer{ position:relative; z-index:2; }
 
-        .form-group { margin-bottom: 20px; }
-        .form-group label { display: block; margin-bottom: 8px; font-weight: 500; }
-        .form-group input, .form-group textarea { 
-            width: 100%; 
-            padding: 12px; 
-            border: 1px solid var(--gray-300); 
-            border-radius: 8px; 
-        }
-        .form-row { display: flex; gap: 16px; }
-        .form-row .form-group { flex: 1; }
+.sidebar-header{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  padding: 10px 10px 14px;
+  flex: 0 0 auto;
+}
+.logo{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  font-weight: 900;
+  letter-spacing: .2px;
+  font-size: 18px;
+}
+.logo i{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(124,58,237,.70), rgba(34,211,238,.35));
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 14px 30px rgba(124,58,237,.18);
+}
+.sidebar-close{
+  display:none;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  cursor:pointer;
+}
 
-        .mobile-toggle { 
-            display: none; 
-            position: fixed; 
-            top: 20px; 
-            left: 20px; 
-            z-index: 1100; 
-            background: var(--primary); 
-            color: white; 
-            border: none; 
-            width: 48px; 
-            height: 48px; 
-            border-radius: 12px; 
-            font-size: 20px; 
-            cursor: pointer; 
-            box-shadow: var(--shadow); 
-        }
-        .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 999; }
+.user-profile{
+  display:flex;
+  gap: 12px;
+  padding: 14px 12px;
+  border-radius: var(--r16);
+  border: 1px solid var(--border2);
+  background:
+    radial-gradient(140% 180% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: 0 12px 26px rgba(0,0,0,.18);
+  flex: 0 0 auto;
+}
+.profile-pic{
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: 0 10px 20px rgba(0,0,0,.22);
+}
+.profile-pic.default{
+  display:grid;
+  place-items:center;
+  font-weight: 950;
+  font-size: 18px;
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.55), rgba(124,58,237,.55));
+}
+.user-info h4{ margin: 2px 0 2px; font-size: 15px; font-weight: 900; }
+.user-info p{
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow:hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 210px;
+}
 
-        @media (max-width: 768px) {
-            .sidebar { transform: translateX(-100%); width: 300px; }
-            .sidebar.active { transform: translateX(0); }
-            .sidebar-overlay.active { display: block; }
-            .sidebar-close { display: block; }
-            .mobile-toggle { display: flex; align-items: center; justify-content: center; }
-            .main-content { margin-left: 0; padding: 24px 16px; padding-top: 80px; }
-            .grid { grid-template-columns: 1fr; }
-            .form-row { flex-direction: column; }
-        }
+.nav-menu{
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 6px 10px;
+  margin-top: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,.18) transparent;
+}
+.nav-menu::-webkit-scrollbar{ width: 8px; }
+.nav-menu::-webkit-scrollbar-track{ background: transparent; }
+.nav-menu::-webkit-scrollbar-thumb{ background: rgba(255,255,255,.16); border-radius: 99px; }
+.nav-menu::-webkit-scrollbar-thumb:hover{ background: rgba(255,255,255,.22); }
+
+.nav-link{
+  position: relative;
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  color: rgba(234,240,255,.90);
+  border: 1px solid transparent;
+  transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  min-height: 46px;
+}
+.nav-link i{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 12px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.10);
+}
+.nav-link:hover{
+  background: rgba(255,255,255,.06);
+  border-color: rgba(255,255,255,.12);
+  transform: translateX(2px);
+}
+.nav-link.active{
+  background:
+    radial-gradient(120% 160% at 10% 20%, rgba(255,255,255,.14), transparent 55%),
+    linear-gradient(135deg, rgba(124,58,237,.55), rgba(34,211,238,.20));
+  border-color: rgba(255,255,255,.18);
+  box-shadow: 0 18px 40px rgba(124,58,237,.20);
+}
+.badge{
+  margin-left:auto;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--text);
+  background:
+    radial-gradient(120% 180% at 20% 20%, rgba(255,255,255,.20), transparent 55%),
+    linear-gradient(135deg, rgba(251,113,133,.70), rgba(124,58,237,.45));
+  border: 1px solid rgba(255,255,255,.18);
+  flex: 0 0 auto;
+}
+
+.sidebar-quick-stats{
+  flex: 0 0 auto;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: var(--r16);
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+}
+.sidebar-stat{
+  display:flex;
+  gap: 12px;
+  align-items:center;
+  padding: 10px;
+  border-radius: 14px;
+  transition: background .18s ease;
+}
+.sidebar-stat:hover{ background: rgba(255,255,255,.04); }
+.sidebar-stat-icon{
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  display:grid;
+  place-items:center;
+  border: 1px solid rgba(255,255,255,.12);
+  background:
+    radial-gradient(120% 180% at 20% 10%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.35), rgba(124,58,237,.35));
+  box-shadow: 0 14px 26px rgba(0,0,0,.18);
+}
+.sidebar-stat-label{ font-size: 12px; color: var(--muted); }
+.sidebar-stat-number{ font-size: 18px; font-weight: 950; letter-spacing: .2px; }
+
+.sidebar-footer{ flex: 0 0 auto; margin-top: 12px; }
+.logout-btn{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap: 10px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,.14);
+  background:
+    radial-gradient(140% 180% at 20% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(135deg, rgba(251,113,133,.20), rgba(255,255,255,.03));
+  box-shadow: 0 14px 26px rgba(0,0,0,.16);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.logout-btn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 18px 34px rgba(251,113,133,.18);
+}
+
+.main-content{ padding: 26px 26px 40px; }
+
+.page-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 18px;
+  border-radius: var(--r20);
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(120% 220% at 15% 10%, rgba(255,255,255,.10), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: var(--shadow2);
+}
+.page-header h1{
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 950;
+  letter-spacing: .2px;
+}
+.page-header p{ margin:0; color: var(--muted); font-size: 14px; }
+
+.alert-success,
+.alert-error{
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.12);
+  box-shadow: var(--shadow2);
+  font-weight: 650;
+}
+.alert-success{
+  border-color: rgba(52,211,153,.22);
+  background: linear-gradient(180deg, rgba(52,211,153,.10), rgba(255,255,255,.03));
+  color: rgba(234,240,255,.92);
+}
+.alert-error{
+  border-color: rgba(251,113,133,.22);
+  background: linear-gradient(180deg, rgba(251,113,133,.10), rgba(255,255,255,.03));
+  color: rgba(234,240,255,.92);
+}
+
+.grid{
+  margin-top: 16px;
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.card{
+  border-radius: var(--r20);
+  border: 1px solid rgba(255,255,255,.10);
+  background:
+    radial-gradient(140% 220% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: var(--shadow);
+  overflow:hidden;
+  padding: 16px;
+}
+.card p{
+  margin: 12px 0 0;
+  color: rgba(234,240,255,.75);
+  line-height: 1.45;
+  font-size: 13.5px;
+}
+
+.category-tag{
+  display:inline-flex;
+  align-items:center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  font-weight: 900;
+  color: rgba(255,255,255,.95);
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 12px 26px rgba(0,0,0,.18);
+}
+.category-tag i{
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display:grid;
+  place-items:center;
+  background: rgba(0,0,0,.18);
+  border: 1px solid rgba(255,255,255,.18);
+}
+
+.form-group label{
+  display:block;
+  font-size: 13px;
+  font-weight: 800;
+  color: rgba(234,240,255,.86);
+  margin-bottom: 6px;
+}
+.form-group input[type="text"],
+.form-group textarea,
+.form-group input[type="color"]{
+  width:100%;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.18);
+  color: var(--text);
+  outline:none;
+}
+.form-group textarea{ min-height: 110px; resize: vertical; }
+.form-row{
+  display:grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+}
+.form-group input[type="color"]{
+  height: 44px;
+  padding: 6px;
+}
+
+.btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  font-weight: 900;
+  border: 1px solid rgba(255,255,255,.14);
+  color: var(--text);
+  background: rgba(255,255,255,.05);
+  transition: transform .18s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease;
+  cursor:pointer;
+}
+.btn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 12px 30px rgba(124,58,237,.18);
+  background: rgba(255,255,255,.07);
+}
+.btn-primary{
+  background:
+    radial-gradient(120% 180% at 20% 10%, rgba(255,255,255,.16), transparent 55%),
+    linear-gradient(135deg, rgba(124,58,237,.55), rgba(34,211,238,.18));
+}
+.btn-outline{
+  background: rgba(255,255,255,.04);
+}
+.btn-danger{
+  border-color: rgba(251,113,133,.30);
+  background: linear-gradient(135deg, rgba(251,113,133,.18), rgba(255,255,255,.03));
+}
+.btn-danger:hover{
+  box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 12px 30px rgba(251,113,133,.16);
+}
+
+.modal{
+  position: fixed;
+  inset: 0;
+  display:none;
+  place-items:center;
+  padding: 16px;
+  background: rgba(2,6,23,.62);
+  z-index: 2500;
+}
+.modal.active{ display:grid; }
+.modal-content{
+  width: min(560px, 100%);
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.14);
+  background:
+    radial-gradient(140% 220% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(180deg, rgba(10,14,35,.92), rgba(10,14,35,.74));
+  box-shadow: 0 30px 90px rgba(0,0,0,.55);
+  padding: 18px 18px 16px;
+}
+.modal-content h2{
+  margin: 0 0 12px;
+  font-size: 18px;
+  font-weight: 950;
+  letter-spacing: .2px;
+}
+
+@media (max-width: 1100px){
+  .grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px){
+  .dashboard-wrapper{ grid-template-columns: 1fr; }
+  .mobile-toggle{ display:grid; }
+
+  .sidebar{
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 320px;
+    transform: translateX(-105%);
+    transition: transform .25s ease;
+    z-index: 1601;
+  }
+  .sidebar.active{ transform: translateX(0); }
+  .sidebar-close{ display:grid; }
+  .sidebar-overlay{ z-index: 1600; }
+
+  .main-content{ padding: 22px 16px 36px; }
+  .page-header{ flex-direction: column; align-items: flex-start; }
+  .grid{ grid-template-columns: 1fr; }
+}
+@media (max-width: 520px){
+  .user-info p{ max-width: 160px; }
+  .form-row{ grid-template-columns: 1fr; }
+}
+
+a:focus, button:focus{ outline: none; }
+a:focus-visible, button:focus-visible{
+  box-shadow: 0 0 0 3px rgba(34,211,238,.25), 0 0 0 1px rgba(255,255,255,.10);
+  border-radius: 14px;
+}
+
     </style>
 </head>
+
 <body>
     <button class="mobile-toggle" id="sidebarToggle"><i class="fas fa-bars"></i></button>
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -273,20 +677,79 @@ $categories = $pdo->query("
             </div>
 
             <nav class="nav-menu">
-                <a href="admin.php" class="nav-link"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
-                <a href="students.php" class="nav-link"><i class="fas fa-users"></i> Students</a>
-                <a href="goals.php" class="nav-link"><i class="fas fa-bullseye"></i> System Goals</a>
-                <a href="assign_goals.php" class="nav-link"><i class="fas fa-tasks"></i> Assign Goals</a>
-                <a href="achievements.php" class="nav-link"><i class="fas fa-trophy"></i> Achievements</a>
-                <a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a>
-                <a href="notifications.php" class="nav-link"><i class="fas fa-bell"></i> Notifications</a>
-                <a href="categories.php" class="nav-link active"><i class="fas fa-tags"></i> Categories</a>
-                <a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> Settings</a>
-            </nav>
+                <a href="admin.php" class="nav-link <?php echo $current === 'admin.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tachometer-alt"></i> Dashboard
+                </a>
 
+                <a href="students.php" class="nav-link <?php echo $current === 'students.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-users"></i> Students
+                    <?php if ($students_count > 0): ?><span class="badge"><?php echo $students_count; ?></span><?php endif; ?>
+                </a>
+
+                <a href="goals.php" class="nav-link <?php echo $current === 'goals.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bullseye"></i> All Goals
+                    <?php if ($goals_count > 0): ?><span class="badge"><?php echo $goals_count; ?></span><?php endif; ?>
+                </a>
+
+                <a href="assign_goals.php" class="nav-link <?php echo $current === 'assign_goals.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tasks"></i> Assign Goals
+                    <?php if ($assigned_count > 0): ?><span class="badge"><?php echo $assigned_count; ?></span><?php endif; ?>
+                </a>
+
+                <!-- ✅ Progress Requests nav link -->
+                <a href="progress_requests.php" class="nav-link <?php echo $current === 'progress_requests.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-check-double"></i> Progress Requests
+                    <?php if ($pending_requests > 0): ?><span class="badge"><?php echo $pending_requests; ?></span><?php endif; ?>
+                </a>
+
+                <a href="achievements.php" class="nav-link <?php echo $current === 'achievements.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-trophy"></i> Achievements
+                    <?php if ($points_count > 0): ?><span class="badge"><?php echo $points_count; ?> pts</span><?php endif; ?>
+                </a>
+
+                <a href="reports.php" class="nav-link <?php echo $current === 'reports.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-chart-bar"></i> Reports
+                </a>
+
+                <a href="notifications.php" class="nav-link <?php echo $current === 'notifications.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bell"></i> Notifications
+                </a>
+
+                <!-- IMPORTANT: Only ONE active class at a time (you had Categories active also in goals.php) -->
+                <a href="categories.php" class="nav-link <?php echo $current === 'categories.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tags"></i> Categories
+                </a>
+
+                <a href="settings.php" class="nav-link <?php echo $current === 'settings.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-cog"></i> Settings
+                </a>
+            </nav>
             <div class="sidebar-quick-stats">
-                <!-- Quick stats can be added here if needed -->
+                <div class="sidebar-stat">
+                    <div class="sidebar-stat-icon"><i class="fas fa-users"></i></div>
+                    <div>
+                        <div class="sidebar-stat-label">Students</div>
+                        <div class="sidebar-stat-number"><?php echo (int)($sidebar_stats['students'] ?? 0); ?></div>
+                    </div>
+                </div>
+
+                <div class="sidebar-stat">
+                    <div class="sidebar-stat-icon"><i class="fas fa-bullseye"></i></div>
+                    <div>
+                        <div class="sidebar-stat-label">Goals</div>
+                        <div class="sidebar-stat-number"><?php echo (int)($sidebar_stats['goals'] ?? 0); ?></div>
+                    </div>
+                </div>
+
+                <div class="sidebar-stat">
+                    <div class="sidebar-stat-icon"><i class="fas fa-star"></i></div>
+                    <div>
+                        <div class="sidebar-stat-label">Points</div>
+                        <div class="sidebar-stat-number"><?php echo (int)($sidebar_stats['points'] ?? 0); ?></div>
+                    </div>
+                </div>
             </div>
+
 
             <div class="sidebar-footer">
                 <a href="../logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i> Logout</a>
@@ -410,7 +873,9 @@ $categories = $pdo->query("
             modal.classList.remove('active');
         }
 
-        modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+        modal.addEventListener('click', e => {
+            if (e.target === modal) closeModal();
+        });
 
         // Mobile sidebar
         sidebarToggle.addEventListener('click', () => {
@@ -427,4 +892,5 @@ $categories = $pdo->query("
         });
     </script>
 </body>
+
 </html>

@@ -8,16 +8,17 @@ require_once '../includes/functions.php'; // For getStudentAchievements() functi
 checkAuth('student');
 
 $student_id = $_SESSION['user_id'];
+awardAchievements($pdo, $student_id);
 $success = $_SESSION['success'] ?? '';
 $error = $_SESSION['error'] ?? '';
 unset($_SESSION['success'], $_SESSION['error']);
 
 // === Fetch Student Statistics ===
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ?");
+$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ? AND deleted_at IS NULL");
 $stmt->execute([$student_id]);
 $total_goals = $stmt->fetchColumn() ?: 0;
 
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ? AND status = 'completed'");
+$stmt = $pdo->prepare("SELECT COUNT(*) FROM student_goals WHERE student_id = ? AND status='completed' AND deleted_at IS NULL");
 $stmt->execute([$student_id]);
 $completed_goals = $stmt->fetchColumn() ?: 0;
 
@@ -45,16 +46,19 @@ $recent_activity = $pdo->prepare("
         n.*,
         DATE_FORMAT(n.created_at, '%b %d, %Y %h:%i %p') as formatted_date
     FROM notifications n
-    WHERE n.user_id = ? AND n.type = 'achievement'
+ WHERE n.user_id = ? AND n.type = 'achievement' AND n.deleted_at IS NULL
+
     ORDER BY n.created_at DESC
     LIMIT 10
 ");
 $recent_activity->execute([$student_id]);
 $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
+$current = basename($_SERVER['PHP_SELF']);
 ?>
 
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -62,814 +66,723 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        :root {
-            /* Primary Colors */
-            --primary: #4f46e5;
-            --primary-light: #eef2ff;
-            --primary-dark: #4338ca;
-            
-            /* Secondary Colors */
-            --secondary: #64748b;
-            --secondary-light: #f8fafc;
-            --secondary-dark: #475569;
-            
-            /* Status Colors */
-            --success: #10b981;
-            --success-light: #d1fae5;
-            --warning: #f59e0b;
-            --warning-light: #fef3c7;
-            --danger: #ef4444;
-            --danger-light: #fee2e2;
-            --info: #3b82f6;
-            --info-light: #dbeafe;
-            --purple: #8b5cf6;
-            --gold: #fbbf24;
-            --silver: #9ca3af;
-            --bronze: #f97316;
-            
-            /* Neutral Colors */
-            --dark: #1e293b;
-            --light: #f1f5f9;
-            --white: #ffffff;
-            --gray: #e2e8f0;
-            --gray-light: #f9fafb;
-            --gray-dark: #6b7280;
-            
-            /* Typography */
-            --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            --font-size-xs: 0.75rem;
-            --font-size-sm: 0.875rem;
-            --font-size-base: 1rem;
-            --font-size-lg: 1.125rem;
-            --font-size-xl: 1.25rem;
-            --font-size-2xl: 1.5rem;
-            --font-size-3xl: 1.875rem;
-            --font-size-4xl: 2.25rem;
-            
-            /* Spacing */
-            --spacing-xs: 0.25rem;
-            --spacing-sm: 0.5rem;
-            --spacing-md: 1rem;
-            --spacing-lg: 1.5rem;
-            --spacing-xl: 2rem;
-            --spacing-2xl: 3rem;
-            
-            /* Borders & Shadows */
-            --radius-sm: 0.375rem;
-            --radius-md: 0.5rem;
-            --radius-lg: 0.75rem;
-            --radius-xl: 1rem;
-            --radius-2xl: 1.5rem;
-            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-            
-            /* Transitions */
-            --transition-fast: 150ms ease;
-            --transition-base: 300ms ease;
-            --transition-slow: 500ms ease;
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        html {
-            font-size: 16px;
-            scroll-behavior: smooth;
-        }
-
-        body {
-            font-family: var(--font-family);
-            background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
-            color: var(--dark);
-            min-height: 100vh;
-            line-height: 1.5;
-            overflow-x: hidden;
-        }
-
-        a {
-            text-decoration: none;
-            color: inherit;
-            transition: color var(--transition-fast);
-        }
-
-        button {
-            font-family: inherit;
-            cursor: pointer;
-            border: none;
-            background: none;
-            outline: none;
-        }
-
-        /* ===== DASHBOARD LAYOUT ===== */
-        .dashboard-wrapper {
-            display: flex;
-            min-height: 100vh;
-            position: relative;
-        }
-
-        /* ===== SIDEBAR ===== */
-        .sidebar {
-            width: 280px;
-            background: var(--white);
-            border-right: 1px solid var(--gray);
-            position: fixed;
-            height: 100vh;
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            transition: transform var(--transition-base);
-            overflow: hidden;
-            box-shadow: 4px 0 20px rgba(0, 0, 0, 0.08);
-        }
-
-        .sidebar-header {
-            padding: var(--spacing-lg);
-            border-bottom: 1px solid var(--gray);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-shrink: 0;
-        }
-
-        .logo {
-            font-size: var(--font-size-xl);
-            font-weight: 800;
-            color: var(--primary);
-            display: flex;
-            align-items: center;
-            gap: var(--spacing-sm);
-        }
-
-        .sidebar-close {
-            display: none;
-            color: var(--secondary);
-            font-size: var(--font-size-xl);
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: var(--spacing-xs);
-        }
-
-        .user-profile {
-            padding: var(--spacing-lg);
-            border-bottom: 1px solid var(--gray);
-            text-align: center;
-            flex-shrink: 0;
-        }
-
-        .profile-pic {
-            width: 80px;
-            height: 80px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 4px solid var(--primary-light);
-            margin: 0 auto var(--spacing-md);
-        }
-
-        .profile-pic.default {
-            background: linear-gradient(135deg, var(--primary), #8b5cf6);
-            color: var(--white);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: var(--font-size-2xl);
-            font-weight: bold;
-        }
-
-        .user-info h4 {
-            font-size: var(--font-size-lg);
-            font-weight: 600;
-            margin-bottom: var(--spacing-xs);
-        }
-
-        .user-info p {
-            color: var(--secondary);
-            font-size: var(--font-size-sm);
-            margin-bottom: var(--spacing-sm);
-        }
-
-        .user-tag {
-            display: inline-block;
-            background: var(--primary-light);
-            color: var(--primary);
-            padding: 0.25rem 0.75rem;
-            border-radius: 20px;
-            font-size: var(--font-size-xs);
-            font-weight: 600;
-        }
-
-        .nav-menu {
-            flex: 1;
-            padding: var(--spacing-md) 0;
-            overflow-y: auto;
-            min-height: 0;
-        }
-
-        .nav-menu::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .nav-menu::-webkit-scrollbar-track {
-            background: var(--light);
-        }
-
-        .nav-menu::-webkit-scrollbar-thumb {
-            background: var(--gray);
-            border-radius: 3px;
-        }
-
-        .nav-link {
-            display: flex;
-            align-items: center;
-            gap: var(--spacing-sm);
-            padding: 0.875rem var(--spacing-lg);
-            margin: 0 var(--spacing-sm);
-            color: var(--secondary-dark);
-            font-weight: 500;
-            border-radius: var(--radius-md);
-            transition: all var(--transition-base);
-        }
-
-        .nav-link:hover {
-            background: var(--secondary-light);
-            color: var(--primary);
-            transform: translateX(4px);
-        }
-
-        .nav-link.active {
-            background: linear-gradient(90deg, var(--primary-light), transparent);
-            color: var(--primary);
-            font-weight: 600;
-            border-left: 4px solid var(--primary);
-        }
-
-        .badge {
-            background: linear-gradient(135deg, var(--danger), #dc2626);
-            color: var(--white);
-            font-size: var(--font-size-xs);
-            padding: 0.25rem 0.5rem;
-            border-radius: 20px;
-            margin-left: auto;
-            font-weight: 700;
-            min-width: 1.5rem;
-            text-align: center;
-        }
-
-        .sidebar-quick-stats {
-            padding: var(--spacing-lg);
-            background: var(--secondary-light);
-            border-top: 1px solid var(--gray);
-            flex-shrink: 0;
-        }
-
-        .sidebar-stat {
-            display: flex;
-            align-items: center;
-            gap: var(--spacing-sm);
-            margin-bottom: var(--spacing-md);
-        }
-
-        .sidebar-stat:last-child {
-            margin-bottom: 0;
-        }
-
-        .sidebar-stat-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: var(--radius-md);
-            background: var(--primary-light);
-            color: var(--primary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.25rem;
-        }
-
-        .sidebar-stat-number {
-            font-size: var(--font-size-lg);
-            font-weight: 700;
-            color: var(--dark);
-        }
-
-        .sidebar-stat-label {
-            font-size: var(--font-size-xs);
-            color: var(--secondary);
-        }
-
-        .logout-btn {
-            margin: var(--spacing-lg);
-            background: linear-gradient(135deg, var(--danger-light), #fecaca);
-            color: #dc2626;
-            padding: 0.875rem;
-            border-radius: var(--radius-lg);
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: var(--spacing-sm);
-            transition: all var(--transition-base);
-            text-align: center;
-            text-decoration: none;
-            flex-shrink: 0;
-        }
-
-        .logout-btn:hover {
-            background: linear-gradient(135deg, #fecaca, #fca5a5);
-            transform: translateY(-2px);
-        }
-
-        /* ===== MAIN CONTENT ===== */
-        .main-content {
-            flex: 1;
-            margin-left: 280px;
-            padding: var(--spacing-xl);
-            min-height: 100vh;
-            animation: fadeIn 0.7s ease-out;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* Page Header */
-        .page-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: var(--spacing-2xl);
-            flex-wrap: wrap;
-            gap: var(--spacing-md);
-        }
-
-        .header-content h1 {
-            font-size: 2.5rem;
-            font-weight: 800;
-            color: var(--dark);
-            margin-bottom: var(--spacing-xs);
-        }
-
-        .header-content p {
-            color: var(--secondary);
-            font-size: var(--font-size-lg);
-        }
-
-        /* Stats Grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: var(--spacing-lg);
-            margin-bottom: var(--spacing-2xl);
-        }
-
-        .stat-card {
-            background: var(--white);
-            border-radius: var(--radius-lg);
-            padding: var(--spacing-lg);
-            box-shadow: var(--shadow-md);
-            transition: all var(--transition-base);
-            border: 1px solid var(--gray);
-            text-align: center;
-        }
-
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-lg);
-        }
-
-        .stat-icon {
-            width: 60px;
-            height: 60px;
-            border-radius: var(--radius-lg);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.5rem;
-            color: var(--white);
-            margin: 0 auto var(--spacing-md);
-        }
-
-        .stat-card:nth-child(1) .stat-icon { background: linear-gradient(135deg, var(--primary), #8b5cf6); }
-        .stat-card:nth-child(2) .stat-icon { background: linear-gradient(135deg, var(--success), #059669); }
-        .stat-card:nth-child(3) .stat-icon { background: linear-gradient(135deg, var(--warning), #d97706); }
-        .stat-card:nth-child(4) .stat-icon { background: linear-gradient(135deg, var(--purple), #a855f7); }
-
-        .stat-number {
-            font-size: 2rem;
-            font-weight: 800;
-            color: var(--dark);
-            margin-bottom: var(--spacing-xs);
-        }
-
-        .stat-label {
-            font-size: var(--font-size-sm);
-            color: var(--gray-dark);
-        }
-
-        /* Alerts */
-        .alert {
-            padding: var(--spacing-md);
-            border-radius: var(--radius-md);
-            margin-bottom: var(--spacing-lg);
-            display: flex;
-            align-items: center;
-            gap: var(--spacing-sm);
-            animation: slideIn 0.3s ease;
-        }
-
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateX(-10px); }
-            to { opacity: 1; transform: translateX(0); }
-        }
-
-        .alert-success {
-            background: var(--success-light);
-            color: #065f46;
-            border: 1px solid #a7f3d0;
-        }
-
-        .alert-error {
-            background: var(--danger-light);
-            color: #991b1b;
-            border: 1px solid #fca5a5;
-        }
-
-        /* Tabs */
-        .tabs {
-            display: flex;
-            gap: 4px;
-            border-bottom: 1px solid var(--gray-300);
-            margin-bottom: 32px;
-        }
-
-        .tab {
-            padding: 16px 24px;
-            background: none;
-            border: none;
-            color: var(--gray-500);
-            font-weight: 600;
-            cursor: pointer;
-            border-bottom: 3px solid transparent;
-            transition: var(--transition);
-            position: relative;
-        }
-
-        .tab:hover { color: var(--primary); }
-        .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-        .tab-badge { position: absolute; top: 8px; right: 8px; background: var(--primary); color: white; font-size: 10px; padding: 2px 6px; border-radius: 10px; }
-
-        /* Content Grid */
-        .content-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: var(--spacing-lg);
-            margin-bottom: var(--spacing-2xl);
-        }
-
-        .card {
-            background: var(--white);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-md);
-            overflow: hidden;
-            border: 1px solid var(--gray);
-        }
-
-        .card-header {
-            padding: var(--spacing-lg);
-            border-bottom: 1px solid var(--gray);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 16px;
-        }
-
-        .card-header h3 {
-            font-size: 19px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .card-body {
-            padding: var(--spacing-lg);
-        }
-
-        /* Achievements Grid */
-        .achievements-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: var(--spacing-md);
-        }
-
-        .achievement-item {
-            text-align: center;
-            padding: var(--spacing-md);
-            border-radius: var(--radius-lg);
-            background: var(--secondary-light);
-            border: 2px solid var(--gray);
-            transition: all var(--transition-base);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .achievement-item:hover {
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-md);
-        }
-
-        .achievement-item.earned {
-            border-color: var(--success);
-            background: linear-gradient(to bottom, var(--success-light), var(--white));
-        }
-
-        .achievement-item.locked {
-            opacity: 0.8;
-            filter: grayscale(30%);
-        }
-
-        .achievement-icon {
-            width: 64px;
-            height: 64px;
-            border-radius: var(--radius-lg);
-            margin: 0 auto var(--spacing-sm);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.5rem;
-            color: var(--white);
-            box-shadow: var(--shadow-md);
-        }
-
-        .achievement-title {
-            font-size: var(--font-size-sm);
-            font-weight: 600;
-            color: var(--dark);
-            margin-bottom: var(--spacing-xs);
-            line-height: 1.3;
-        }
-
-        .achievement-points {
-            font-size: var(--font-size-xs);
-            color: var(--warning);
-            font-weight: 700;
-        }
-
-        .achievement-date {
-            font-size: 0.7rem;
-            color: var(--gray-dark);
-            margin-top: 5px;
-        }
-
-        .achievement-progress {
-            width: 100%;
-            height: 6px;
-            background: var(--gray);
-            border-radius: 3px;
-            margin-top: 10px;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--primary), #7c3aed);
-            border-radius: 3px;
-            transition: width var(--transition-slow);
-        }
-
-        .progress-fill.earned {
-            background: var(--success);
-        }
-
-        .progress-text {
-            font-size: 0.7rem;
-            color: var(--gray-dark);
-            margin-top: 4px;
-        }
-
-        /* Progress Bar */
-        .progress-bar {
-            height: 10px;
-            background: var(--gray);
-            border-radius: 5px;
-            overflow: hidden;
-            margin: var(--spacing-sm) 0;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--primary), #7c3aed);
-            border-radius: 5px;
-            transition: width var(--transition-slow);
-        }
-
-        .progress-fill.completed {
-            background: var(--success);
-        }
-
-        /* Leaderboard */
-        .leaderboard-list {
-            display: flex;
-            flex-direction: column;
-            gap: var(--spacing-sm);
-        }
-
-        .leaderboard-item {
-            display: flex;
-            align-items: center;
-            gap: var(--spacing-md);
-            padding: var(--spacing-md);
-            border-radius: var(--radius-md);
-            background: var(--secondary-light);
-            border: 1px solid var(--gray);
-            transition: all var(--transition-base);
-        }
-
-        .leaderboard-item:hover {
-            background: var(--primary-light);
-            transform: translateX(4px);
-        }
-
-        .leaderboard-rank {
-            font-size: 1.25rem;
-            font-weight: 800;
-            color: var(--primary);
-            width: 40px;
-            text-align: center;
-        }
-
-        .leaderboard-rank.gold { color: var(--gold); }
-        .leaderboard-rank.silver { color: var(--silver); }
-        .leaderboard-rank.bronze { color: var(--bronze); }
-
-        .leaderboard-avatar {
-            width: 48px;
-            height: 48px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 3px solid var(--primary-light);
-        }
-
-        .leaderboard-avatar.default {
-            background: linear-gradient(135deg, var(--primary), #8b5cf6);
-            color: var(--white);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-        }
-
-        .leaderboard-info {
-            flex: 1;
-        }
-
-        .leaderboard-name {
-            font-weight: 600;
-            color: var(--dark);
-            margin-bottom: var(--spacing-xs);
-        }
-
-        .leaderboard-stats {
-            display: flex;
-            gap: var(--spacing-md);
-            font-size: var(--font-size-sm);
-            color: var(--gray-dark);
-        }
-
-        .leaderboard-score {
-            margin-left: auto;
-            font-weight: 700;
-            color: var(--primary);
-        }
-
-        /* Empty States */
-        .empty-state {
-            text-align: center;
-            padding: var(--spacing-2xl);
-            color: var(--secondary);
-        }
-
-        .empty-state i {
-            font-size: 4rem;
-            margin-bottom: var(--spacing-lg);
-            opacity: 0.5;
-        }
-
-        .empty-state p {
-            margin-bottom: var(--spacing-lg);
-            font-size: var(--font-size-lg);
-        }
-
-        /* Activity List */
-        .activity-list {
-            display: flex;
-            flex-direction: column;
-            gap: var(--spacing-sm);
-        }
-
-        .activity-item {
-            display: flex;
-            align-items: flex-start;
-            gap: var(--spacing-md);
-            padding: var(--spacing-md);
-            border-radius: var(--radius-md);
-            background: var(--secondary-light);
-            border-left: 4px solid var(--gray);
-            transition: all var(--transition-base);
-        }
-
-        .activity-item:hover {
-            transform: translateX(4px);
-        }
-
-        .activity-item.achievement {
-            border-left-color: var(--warning);
-        }
-
-        .activity-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: var(--radius-md);
-            background: var(--primary-light);
-            color: var(--primary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.25rem;
-            flex-shrink: 0;
-        }
-
-        .activity-content {
-            flex: 1;
-        }
-
-        .activity-title {
-            font-weight: 600;
-            color: var(--dark);
-            margin-bottom: var(--spacing-xs);
-        }
-
-        .activity-message {
-            font-size: var(--font-size-sm);
-            color: var(--secondary);
-            margin-bottom: var(--spacing-xs);
-            line-height: 1.4;
-        }
-
-        .activity-time {
-            font-size: var(--font-size-xs);
-            color: var(--gray-dark);
-        }
-
-        /* Mobile Toggle */
-        .mobile-toggle {
-            display: none;
-            position: fixed;
-            top: 20px;
-            left: 20px;
-            z-index: 1100;
-            background: var(--primary);
-            color: white;
-            border: none;
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
-            font-size: 20px;
-            cursor: pointer;
-            box-shadow: var(--shadow);
-        }
-
-        .sidebar-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 999;
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .sidebar {
-                transform: translateX(-100%);
-                width: 300px;
-            }
-            .sidebar.active { transform: translateX(0); }
-            .sidebar-overlay.active { display: block; }
-            .sidebar-close { display: block; }
-            .mobile-toggle { display: flex; align-items: center; justify-content: center; }
-            .main-content { margin-left: 0; padding: 24px 16px; padding-top: 80px; }
-            .page-header { flex-direction: column; align-items: flex-start; }
-            .stats-grid, .achievements-grid { grid-template-columns: 1fr; }
-            .content-grid { grid-template-columns: 1fr; }
-        }
+
+:root{
+  --bg0:#070A18;
+  --bg1:#0B1030;
+
+  --text:#EAF0FF;
+  --muted: rgba(234,240,255,.65);
+  --muted2: rgba(234,240,255,.50);
+
+  --primary:#4F46E5;
+  --primary-light: rgba(79,70,229,.14);
+
+  --cyan:#22D3EE;
+  --pink:#60A5FA;
+
+  --success:#34D399;
+  --warning:#FBBF24;
+  --danger:#FB7185;
+  --info:#22D3EE;
+
+  --purple:#8b5cf6;
+  --gold:#fbbf24;
+  --silver:#9ca3af;
+  --bronze:#f97316;
+
+  --border: rgba(255,255,255,.10);
+  --border2: rgba(255,255,255,.08);
+
+  --shadow: 0 18px 45px rgba(0,0,0,.35);
+  --shadow2: 0 10px 30px rgba(0,0,0,.22);
+
+  --r12: 12px;
+  --r14: 14px;
+  --r16: 16px;
+  --r20: 20px;
+}
+
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+
+body{
+  margin:0;
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  background:
+    radial-gradient(900px 520px at 18% 10%, rgba(79,70,229,.22), transparent 60%),
+    radial-gradient(900px 520px at 88% 15%, rgba(34,211,238,.18), transparent 58%),
+    radial-gradient(900px 520px at 70% 95%, rgba(96,165,250,.14), transparent 62%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+  overflow-x:hidden;
+}
+
+a{ color: inherit; text-decoration:none; }
+img{ max-width:100%; display:block; }
+button{ font-family: inherit; cursor:pointer; border:none; background:none; }
+
+/* ===== Mobile Toggle + Overlay ===== */
+.mobile-toggle{
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 2000;
+  width: 44px;
+  height: 44px;
+  display: none;
+  place-items: center;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(10,14,35,.60);
+  color: var(--text);
+  box-shadow: var(--shadow2);
+  backdrop-filter: blur(12px);
+}
+.sidebar-overlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+  z-index: 1600;
+}
+.sidebar-overlay.active{
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ===== Layout ===== */
+.dashboard-wrapper{
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  min-height: 100vh;
+}
+
+/* ===== Sidebar ===== */
+.sidebar{
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+  display:flex;
+  flex-direction: column;
+  padding: 18px 16px 16px;
+  background:
+    radial-gradient(700px 320px at 20% 0%, rgba(79,70,229,.18), transparent 60%),
+    radial-gradient(520px 300px at 100% 20%, rgba(34,211,238,.14), transparent 60%),
+    linear-gradient(180deg, rgba(10,14,35,.85), rgba(10,14,35,.62));
+  border-right: 1px solid rgba(255,255,255,.10);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 10px 50px rgba(0,0,0,.25);
+}
+.sidebar::before{
+  content:"";
+  position:absolute;
+  inset:-2px;
+  background: linear-gradient(120deg, rgba(79,70,229,.20), rgba(34,211,238,.14), rgba(96,165,250,.10));
+  opacity:.22;
+  filter: blur(26px);
+  pointer-events:none;
+  z-index:0;
+}
+.sidebar-header,.user-profile,.nav-menu,.sidebar-quick-stats,.sidebar-footer{ position:relative; z-index:2; }
+
+.sidebar-header{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  padding: 10px 10px 12px;
+}
+.logo{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  font-weight: 900;
+  letter-spacing: .2px;
+  font-size: 18px;
+}
+.logo i{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 12px;
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.70), rgba(34,211,238,.35));
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 14px 30px rgba(79,70,229,.18);
+}
+.sidebar-close{
+  display:none;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+}
+
+/* profile */
+.user-profile{
+  display:flex;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: var(--r16);
+  border: 1px solid var(--border2);
+  background:
+    radial-gradient(140% 180% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: 0 12px 26px rgba(0,0,0,.18);
+}
+.profile-pic{
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow: 0 10px 20px rgba(0,0,0,.22);
+}
+.profile-pic.default{
+  display:grid;
+  place-items:center;
+  font-weight: 950;
+  font-size: 18px;
+  color: var(--text);
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.55), rgba(79,70,229,.55));
+}
+.user-info h4{ margin: 2px 0 2px; font-size: 15px; font-weight: 900; }
+.user-info p{
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 210px;
+}
+.user-tag{
+  display:inline-flex;
+  align-items:center;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 950;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: rgba(79,70,229,.95);
+  background: rgba(224,231,255,.95);
+}
+
+/* nav */
+.nav-menu{
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px 6px 8px;
+  margin-top: 8px;
+  display:flex;
+  flex-direction: column;
+  gap: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,.18) transparent;
+}
+.nav-menu::-webkit-scrollbar{ width: 8px; }
+.nav-menu::-webkit-scrollbar-thumb{ background: rgba(255,255,255,.16); border-radius: 99px; }
+
+.nav-link{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  color: rgba(234,240,255,.92);
+  border: 1px solid transparent;
+  transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  min-height: 46px;
+  font-size: 14.5px;
+}
+.nav-link i{
+  width: 34px;
+  height: 34px;
+  display:grid;
+  place-items:center;
+  border-radius: 12px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.10);
+}
+.nav-link:hover{
+  background: rgba(255,255,255,.06);
+  border-color: rgba(255,255,255,.12);
+  transform: translateX(2px);
+}
+.nav-link.active{
+  background:
+    radial-gradient(120% 160% at 10% 20%, rgba(255,255,255,.14), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.55), rgba(34,211,238,.20));
+  border-color: rgba(255,255,255,.18);
+  box-shadow: 0 18px 40px rgba(79,70,229,.18);
+}
+.badge{
+  margin-left:auto;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--text);
+  background:
+    radial-gradient(120% 180% at 20% 20%, rgba(255,255,255,.20), transparent 55%),
+    linear-gradient(135deg, rgba(251,113,133,.70), rgba(79,70,229,.35));
+  border: 1px solid rgba(255,255,255,.18);
+}
+
+/* quick stats + logout */
+.sidebar-quick-stats{
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: var(--r16);
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+}
+.sidebar-stat{
+  display:flex;
+  gap: 12px;
+  align-items:center;
+  padding: 10px;
+  border-radius: 14px;
+}
+.sidebar-stat:hover{ background: rgba(255,255,255,.04); }
+.sidebar-stat-icon{
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  display:grid;
+  place-items:center;
+  border: 1px solid rgba(255,255,255,.12);
+  background:
+    radial-gradient(120% 180% at 20% 10%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.35), rgba(79,70,229,.35));
+  box-shadow: 0 14px 26px rgba(0,0,0,.18);
+}
+.sidebar-stat-label{ font-size: 12px; color: var(--muted); }
+.sidebar-stat-number{ font-size: 18px; font-weight: 950; }
+
+.sidebar-footer{ margin-top: 12px; }
+.logout-btn{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap: 10px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.14);
+  background:
+    radial-gradient(140% 180% at 20% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(135deg, rgba(96,165,250,.16), rgba(255,255,255,.03));
+  box-shadow: 0 14px 26px rgba(0,0,0,.16);
+}
+
+/* ===== Main ===== */
+.main-content{
+  padding: 22px 22px 32px;
+}
+.main-content > *{
+  max-width: 1180px;
+}
+
+/* header */
+.page-header{
+  width: 100%;
+  padding: 16px 16px;
+  border-radius: var(--r20);
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(120% 220% at 15% 10%, rgba(255,255,255,.10), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: var(--shadow2);
+  margin-bottom: 14px;
+}
+.header-content h1{ margin:0 0 6px; font-size: 24px; font-weight: 950; }
+.header-content p{ margin:0; color: var(--muted); font-size: 14px; }
+
+/* alerts */
+.alert{
+  width: 100%;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  display:flex;
+  align-items:center;
+  gap: 10px;
+}
+.alert i{
+  width: 34px; height:34px;
+  display:grid; place-items:center;
+  border-radius: 12px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.10);
+}
+.alert-success{ border-color: rgba(52,211,153,.25); }
+.alert-success i{ color: var(--success); }
+.alert-error{ border-color: rgba(251,113,133,.25); }
+.alert-error i{ color: var(--danger); }
+
+/* stats */
+.stats-grid{
+  width: 100%;
+  margin-top: 14px;
+  display:grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.stat-card{
+  border-radius: var(--r20);
+  border: 1px solid rgba(255,255,255,.12);
+  background:
+    radial-gradient(120% 180% at 10% 0%, rgba(255,255,255,.12), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: var(--shadow2);
+  text-align:left;
+}
+.stat-icon{
+  width: 44px;
+  height: 44px;
+  border-radius: 16px;
+  display:grid;
+  place-items:center;
+  border: 1px solid rgba(255,255,255,.16);
+  background:
+    radial-gradient(120% 180% at 20% 15%, rgba(255,255,255,.20), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.40), rgba(79,70,229,.40));
+  box-shadow: 0 16px 30px rgba(0,0,0,.22);
+  margin-bottom: 10px;
+}
+.stat-card{ padding: 14px; }
+.stat-number{ font-size: 24px; font-weight: 950; line-height: 1.1; }
+.stat-label{ margin-top: 2px; font-size: 13px; color: var(--muted); }
+
+/* ===== Tabs ===== */
+.tabs{
+  width:100%;
+  margin-top: 14px;
+  display:flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: var(--r20);
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  box-shadow: var(--shadow2);
+}
+.tab{
+  position: relative;
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgba(234,240,255,.82);
+  font-weight: 950;
+  cursor:pointer;
+  transition: transform .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+  white-space: nowrap;
+}
+.tab:hover{
+  background: rgba(255,255,255,.05);
+  border-color: rgba(255,255,255,.10);
+  transform: translateY(-1px);
+}
+.tab.active{
+  background:
+    radial-gradient(120% 160% at 10% 20%, rgba(255,255,255,.14), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.55), rgba(34,211,238,.20));
+  border-color: rgba(255,255,255,.18);
+  box-shadow: 0 18px 40px rgba(79,70,229,.18);
+  color: rgba(234,240,255,.95);
+}
+.tab-badge{
+  position:absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 10px;
+  font-weight: 950;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(0,0,0,.25);
+  border: 1px solid rgba(255,255,255,.14);
+}
+
+/* Tab content show/hide (YOUR JS uses .tab-content.active) */
+.tab-content{ display:none; width:100%; margin-top: 12px; }
+.tab-content.active{ display:block; }
+
+/* ===== Cards ===== */
+.card{
+  width: 100%;
+  border-radius: var(--r20);
+  border: 1px solid rgba(255,255,255,.10);
+  background:
+    radial-gradient(140% 220% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
+    linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: var(--shadow);
+  overflow:hidden;
+}
+.card-header{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.03);
+}
+.card-header h3{
+  margin:0;
+  font-size: 15px;
+  font-weight: 950;
+  display:flex;
+  align-items:center;
+  gap: 10px;
+}
+.card-body{ padding: 12px 14px 14px; }
+
+/* content grid (activity tab) */
+.content-grid{
+  width: 100%;
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* ===== Achievements Grid ===== */
+.achievements-grid{
+  display:grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.achievement-item{
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  padding: 12px;
+  text-align:center;
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+  overflow:hidden;
+}
+.achievement-item:hover{
+  transform: translateY(-2px);
+  box-shadow: 0 16px 40px rgba(0,0,0,.35);
+  border-color: rgba(255,255,255,.14);
+}
+
+.achievement-item.earned{
+  border-color: rgba(52,211,153,.22);
+  background:
+    radial-gradient(120% 180% at 20% 0%, rgba(52,211,153,.12), transparent 65%),
+    rgba(255,255,255,.03);
+}
+.achievement-item.locked{
+  opacity: .92;
+}
+
+.achievement-icon{
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  display:grid;
+  place-items:center;
+  margin: 0 auto 8px;
+  border: 1px solid rgba(255,255,255,.18);
+  box-shadow: 0 14px 26px rgba(0,0,0,.20);
+}
+.achievement-title{ font-weight: 950; font-size: 13px; line-height: 1.2; }
+.achievement-points{ margin-top: 4px; font-size: 12px; color: rgba(251,191,36,.95); font-weight: 950; }
+.achievement-date{ margin-top: 6px; font-size: 11px; color: var(--muted2); }
+
+/* progress bar inside achievement */
+.achievement-progress{
+  height: 8px;
+  width: 100%;
+  border-radius: 999px;
+  background: rgba(255,255,255,.07);
+  border: 1px solid rgba(255,255,255,.08);
+  overflow:hidden;
+  margin: 10px 0 6px;
+}
+.progress-fill{
+  height:100%;
+  width:0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(34,211,238,.95), rgba(79,70,229,.95));
+  transition: width 1s cubic-bezier(.22,.75,.12,1);
+}
+.progress-fill.earned,
+.progress-fill.completed{
+  background: rgba(52,211,153,.95);
+}
+.progress-text{ font-size: 11px; color: var(--muted2); font-weight: 800; }
+
+/* ===== Activity ===== */
+.activity-list{
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.activity-item{
+  display:flex;
+  gap: 12px;
+  align-items:flex-start;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  transition: transform .18s ease, background .18s ease, border-color .18s ease;
+}
+.activity-item:hover{
+  transform: translateX(2px);
+  border-color: rgba(255,255,255,.14);
+  background: rgba(255,255,255,.04);
+}
+.activity-item.achievement{ border-left: 4px solid rgba(251,191,36,.85); }
+
+.activity-icon{
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  display:grid;
+  place-items:center;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05);
+  color: rgba(251,191,36,.95);
+  flex-shrink:0;
+}
+.activity-title{ font-weight: 950; font-size: 13px; }
+.activity-message{ font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.activity-time{ font-size: 11px; color: var(--muted2); margin-top: 6px; }
+
+/* ===== Leaderboard ===== */
+.leaderboard-list{
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.leaderboard-item{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  transition: transform .18s ease, background .18s ease, border-color .18s ease;
+}
+.leaderboard-item:hover{
+  transform: translateX(2px);
+  border-color: rgba(255,255,255,.14);
+  background: rgba(255,255,255,.04);
+}
+.leaderboard-rank{
+  width: 34px;
+  height: 34px;
+  border-radius: 14px;
+  display:grid;
+  place-items:center;
+  font-weight: 950;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05);
+  color: rgba(234,240,255,.92);
+}
+.leaderboard-rank.gold{ color: rgba(251,191,36,.95); }
+.leaderboard-rank.silver{ color: rgba(156,163,175,.95); }
+.leaderboard-rank.bronze{ color: rgba(249,115,22,.95); }
+
+.leaderboard-avatar{
+  width: 42px;
+  height: 42px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: 0 12px 26px rgba(0,0,0,.18);
+}
+.leaderboard-avatar.default{
+  display:grid;
+  place-items:center;
+  font-weight: 950;
+  color: var(--text);
+  background:
+    radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
+    linear-gradient(135deg, rgba(34,211,238,.55), rgba(79,70,229,.55));
+}
+.leaderboard-name{ font-weight: 950; font-size: 13px; }
+.leaderboard-stats{
+  margin-top: 3px;
+  display:flex;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+/* empty */
+.empty-state{
+  text-align:center;
+  padding: 22px 14px;
+  color: var(--muted);
+}
+.empty-state i{
+  display:inline-grid;
+  place-items:center;
+  width: 52px;
+  height: 52px;
+  border-radius: 18px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05);
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 1000px){
+  .stats-grid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .content-grid{ grid-template-columns: 1fr; }
+}
+
+@media (max-width: 860px){
+  .dashboard-wrapper{ grid-template-columns: 1fr; }
+  .mobile-toggle{ display:grid; }
+
+  .sidebar{
+    position: fixed;
+    left: 0; top: 0;
+    width: 320px;
+    transform: translateX(-105%);
+    transition: transform .25s ease;
+    z-index: 1601;
+  }
+  .sidebar.active{ transform: translateX(0); }
+  .sidebar-close{ display:grid; }
+
+  .main-content{ padding: 18px 14px 28px; }
+  .tabs{ overflow-x:auto; }
+  .tabs::-webkit-scrollbar{ height: 8px; }
+  .tabs::-webkit-scrollbar-thumb{ background: rgba(255,255,255,.14); border-radius: 99px; }
+}
+
+@media (max-width: 520px){
+  .stats-grid{ grid-template-columns: 1fr; }
+  .achievements-grid{ grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .user-info p{ max-width: 160px; }
+}
+
     </style>
 </head>
+
 <body>
     <button class="mobile-toggle" id="sidebarToggle"><i class="fas fa-bars"></i></button>
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
@@ -896,26 +809,48 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
             </div>
 
             <nav class="nav-menu">
-                <a href="dashboard.php" class="nav-link"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
-                <a href="goals.php" class="nav-link"><i class="fas fa-bullseye"></i> My Goals</a>
-                <a href="create_goal.php" class="nav-link"><i class="fas fa-plus-circle"></i> Create Goal</a>
-                <a href="achievements.php" class="nav-link active"><i class="fas fa-trophy"></i> Achievements <?php if (count($earned_achievements) > 0): ?><span class="badge"><?php echo count($earned_achievements); ?></span><?php endif; ?></a>
-                <a href="notifications.php" class="nav-link"><i class="fas fa-inbox"></i> Notifications <?php if ($unread > 0): ?><span class="badge"><?php echo $unread; ?></span><?php endif; ?></a>
-                <a href="profile.php" class="nav-link"><i class="fas fa-user"></i> Profile</a>
+                <a href="dashboard.php" class="nav-link <?php echo $current === 'dashboard.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-tachometer-alt"></i> Dashboard
+                </a>
+
+                <a href="goals.php" class="nav-link <?php echo $current === 'goals.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bullseye"></i> Goals
+                </a>
+
+                <a href="achievements.php" class="nav-link <?php echo $current === 'achievements.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-trophy"></i> Achievements
+                </a>
+
+                <a href="notifications.php" class="nav-link <?php echo $current === 'notifications.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-bell"></i> Notifications
+                </a>
+
+                <a href="profile.php" class="nav-link <?php echo $current === 'profile.php' ? 'active' : ''; ?>">
+                    <i class="fas fa-user"></i> Profile
+                </a>
             </nav>
 
             <div class="sidebar-quick-stats">
                 <div class="sidebar-stat">
                     <div class="sidebar-stat-icon"><i class="fas fa-bullseye"></i></div>
-                    <div><div class="sidebar-stat-label">Goals</div><div class="sidebar-stat-number"><?php echo $completed_goals; ?>/<?php echo $total_goals; ?></div></div>
+                    <div>
+                        <div class="sidebar-stat-label">Goals</div>
+                        <div class="sidebar-stat-number"><?php echo $completed_goals; ?>/<?php echo $total_goals; ?></div>
+                    </div>
                 </div>
                 <div class="sidebar-stat">
                     <div class="sidebar-stat-icon"><i class="fas fa-star"></i></div>
-                    <div><div class="sidebar-stat-label">Points</div><div class="sidebar-stat-number"><?php echo $total_points; ?></div></div>
+                    <div>
+                        <div class="sidebar-stat-label">Points</div>
+                        <div class="sidebar-stat-number"><?php echo $total_points; ?></div>
+                    </div>
                 </div>
                 <div class="sidebar-stat">
                     <div class="sidebar-stat-icon"><i class="fas fa-fire"></i></div>
-                    <div><div class="sidebar-stat-label">Streak</div><div class="sidebar-stat-number"><?php echo $streak; ?> days</div></div>
+                    <div>
+                        <div class="sidebar-stat-label">Streak</div>
+                        <div class="sidebar-stat-number"><?php echo $streak; ?> days</div>
+                    </div>
                 </div>
             </div>
 
@@ -1007,7 +942,7 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
                                         </div>
                                         <div class="achievement-title"><?php echo htmlspecialchars($achievement['title']); ?></div>
                                         <div class="achievement-points">+<?php echo $achievement['points']; ?> points</div>
-                                        <div class="achievement-date">Earned: <?php echo date('M d, Y', strtotime($achievement['earned_date'])); ?></div>
+                                        <div class="achievement-date">Earned: <?php echo date('M d, Y', strtotime($achievement['earned_at'])); ?></div>
                                         <?php if ($achievement['description']): ?>
                                             <div style="font-size: 0.75rem; color: var(--gray-dark); margin-top: 5px;">
                                                 <?php echo htmlspecialchars($achievement['description']); ?>
@@ -1039,7 +974,7 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
                             </div>
                         <?php else: ?>
                             <div class="achievements-grid">
-                                <?php foreach ($progress_achievements as $progress): 
+                                <?php foreach ($progress_achievements as $progress):
                                     $achievement = $progress['achievement'];
                                 ?>
                                     <div class="achievement-item locked">
@@ -1048,7 +983,7 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
                                         </div>
                                         <div class="achievement-title"><?php echo htmlspecialchars($achievement['title']); ?></div>
                                         <div class="achievement-points">+<?php echo $achievement['points']; ?> points</div>
-                                        
+
                                         <!-- Progress Bar -->
                                         <div class="achievement-progress">
                                             <div class="progress-fill" style="width: <?php echo $progress['percentage']; ?>%"></div>
@@ -1057,7 +992,7 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
                                             <?php echo $progress['current_value']; ?>/<?php echo $progress['target_value']; ?>
                                             (<?php echo $progress['percentage']; ?>%)
                                         </div>
-                                        
+
                                         <?php if ($achievement['criteria_type'] == 'total_completed_goals'): ?>
                                             <div style="font-size: 0.7rem; color: var(--gray-dark); margin-top: 5px;">
                                                 Complete <?php echo $progress['remaining']; ?> more goal(s)
@@ -1132,13 +1067,16 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
                                 FROM users u
                                 LEFT JOIN user_achievements ua ON u.id = ua.user_id AND ua.deleted_at IS NULL
                                 LEFT JOIN achievements a ON ua.achievement_id = a.id AND a.deleted_at IS NULL
-                                WHERE u.role = 'student' AND u.status = 'active'
+                                WHERE u.role = 'student'
+  AND u.status = 'active'
+  AND u.deleted_at IS NULL
+
                                 GROUP BY u.id
                                 ORDER BY achievements_count DESC, total_points DESC
                                 LIMIT 5
                             ")->fetchAll(PDO::FETCH_ASSOC);
                             ?>
-                            
+
                             <?php if (empty($top_students)): ?>
                                 <div class="empty-state">
                                     <i class="fas fa-users"></i>
@@ -1146,7 +1084,7 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
                                 </div>
                             <?php else: ?>
                                 <div class="leaderboard-list">
-                                    <?php foreach ($top_students as $index => $student): 
+                                    <?php foreach ($top_students as $index => $student):
                                         $rank_class = '';
                                         if ($index === 0) $rank_class = 'gold';
                                         elseif ($index === 1) $rank_class = 'silver';
@@ -1227,10 +1165,10 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
                 // Remove active class from all tabs
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
                 document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-                
+
                 // Add active class to clicked tab
                 tab.classList.add('active');
-                
+
                 // Show corresponding content
                 const tabId = tab.dataset.tab;
                 document.getElementById('tab-' + tabId).classList.add('active');
@@ -1243,13 +1181,14 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
         const sidebarClose = document.getElementById('sidebarClose');
         const overlay = document.getElementById('sidebarOverlay');
 
-        function openSidebar() { 
-            sidebar.classList.add('active'); 
-            overlay.classList.add('active'); 
+        function openSidebar() {
+            sidebar.classList.add('active');
+            overlay.classList.add('active');
         }
-        function closeSidebar() { 
-            sidebar.classList.remove('active'); 
-            overlay.classList.remove('active'); 
+
+        function closeSidebar() {
+            sidebar.classList.remove('active');
+            overlay.classList.remove('active');
         }
 
         sidebarToggle?.addEventListener('click', openSidebar);
@@ -1258,9 +1197,9 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
 
         // Auto-hide sidebar on mobile when clicking outside
         document.addEventListener('click', function(event) {
-            if (window.innerWidth <= 768 && 
+            if (window.innerWidth <= 768 &&
                 sidebar && sidebar.classList.contains('active') &&
-                !sidebar.contains(event.target) && 
+                !sidebar.contains(event.target) &&
                 !sidebarToggle.contains(event.target)) {
                 closeSidebar();
             }
@@ -1282,4 +1221,5 @@ $recent_activity = $recent_activity->fetchAll(PDO::FETCH_ASSOC);
         });
     </script>
 </body>
+
 </html>
