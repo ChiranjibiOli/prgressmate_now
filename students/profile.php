@@ -116,6 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             $student = array_merge($student, $result);
                         }
                     }
+                
                 }
             } catch (Exception $e) {
                 $pdo->rollBack();
