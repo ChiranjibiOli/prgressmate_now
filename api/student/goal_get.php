@@ -1,35 +1,43 @@
 <?php
-session_start();
+// api/student/goal_get.php
+if (session_status() === PHP_SESSION_NONE) session_start();
 require_once '../../includes/db_connection.php';
 require_once '../../includes/functions.php';
-require_once '../_helpers.php';
 
-requireGet();
-checkAuth('student');
+header('Content-Type: application/json');
 
-$student_id = (int)$_SESSION['user_id'];
-$goal_id = (int)($_GET['id'] ?? 0);
+// Must be logged in as student
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'student') {
+    echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+    exit;
+}
 
-if ($goal_id <= 0) jsonResponse(['success' => false, 'error' => 'Invalid id'], 400);
+$student_id = (int) $_SESSION['user_id'];
+$goal_id    = (int) ($_GET['id'] ?? 0);
 
-$stmt = $pdo->prepare("
-  SELECT 
-    id,title,description,category,priority,target_value,unit,due_date,
-    current_value,progress_percentage,status,
-    is_admin_created, is_self_created, goal_id
-  FROM student_goals
-  WHERE id=? AND student_id=? AND deleted_at IS NULL
-  LIMIT 1
-");
-$stmt->execute([$goal_id, $student_id]);
-$goal = $stmt->fetch(PDO::FETCH_ASSOC);
+if ($goal_id <= 0) {
+    echo json_encode(['success' => false, 'error' => 'Invalid goal ID']);
+    exit;
+}
 
-if (!$goal) jsonResponse(['success' => false, 'error' => 'Not found'], 404);
+try {
+    $stmt = $pdo->prepare("
+        SELECT * FROM student_goals
+        WHERE id = ? AND student_id = ? AND deleted_at IS NULL
+    ");
+    $stmt->execute([$goal_id, $student_id]);
+    $goal = $stmt->fetch(PDO::FETCH_ASSOC);
 
-$goal['can_edit']   = ((int)$goal['is_admin_created'] !== 1)
-                   && ((int)($goal['is_self_created'] ?? 0) === 1)
-                   && ($goal['status'] === 'completed');
+    if (!$goal) {
+        echo json_encode(['success' => false, 'error' => 'Goal not found']);
+        exit;
+    }
 
-$goal['can_delete'] = $goal['can_edit'];
+    // Only self-created goals can be edited
+    $goal['can_edit'] = (bool) $goal['is_self_created'];
 
-jsonResponse(['success' => true, 'goal' => $goal]);
+    echo json_encode(['success' => true, 'goal' => $goal]);
+
+} catch (Exception $e) {
+    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+}

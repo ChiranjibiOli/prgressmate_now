@@ -1,124 +1,145 @@
 <?php
-session_start();
-header('Content-Type: application/json; charset=utf-8');
-ini_set('display_errors', 0);
-error_reporting(E_ALL);
-
+// api/student/goal_progress.php
+if (session_status() === PHP_SESSION_NONE) session_start();
 require_once '../../includes/db_connection.php';
 require_once '../../includes/functions.php';
-require_once '../_helpers.php';
+require_once '../../api/_helpers.php';
 
-requirePost();
-checkAuth('student');
-verifyCsrf();
-$student_id = (int)($_SESSION['user_id'] ?? 0);
-$goal_id    = (int)($_POST['goal_id'] ?? 0);
-$progress   = round((float)($_POST['progress_value'] ?? 0), 2);
-$notes      = trim($_POST['notes'] ?? '');
+header('Content-Type: application/json');
 
-if ($student_id <= 0 || $goal_id <= 0 || $progress <= 0) {
-  jsonResponse(['success' => false, 'error' => 'Invalid input'], 400);
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'student') {
+    echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+    exit;
 }
 
-$pdo->beginTransaction();
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode(['success' => false, 'error' => 'Method not allowed']);
+    exit;
+}
+
+// CSRF check
+if (!verifyCsrf($_POST['csrf_token'] ?? '')) {
+    echo json_encode(['success' => false, 'error' => 'Invalid CSRF token']);
+    exit;
+}
+
+$student_id     = (int) $_SESSION['user_id'];
+$goal_id        = (int) ($_POST['goal_id'] ?? 0);
+$progress_value = (float) ($_POST['progress_value'] ?? 0);
+$notes          = trim($_POST['notes'] ?? '');
+
+if ($goal_id <= 0 || $progress_value <= 0) {
+    echo json_encode(['success' => false, 'error' => 'Invalid goal ID or progress value']);
+    exit;
+}
 
 try {
-  $q = $pdo->prepare("
-    SELECT *
-    FROM student_goals
-    WHERE id=? AND student_id=? AND deleted_at IS NULL
-    FOR UPDATE
-  ");
-  $q->execute([$goal_id, $student_id]);
-  $goal = $q->fetch(PDO::FETCH_ASSOC);
-
-  if (!$goal) throw new Exception("Goal not found");
-
-  if (($goal['status'] ?? '') === 'completed') {
-    $pdo->rollBack();
-    jsonResponse(['success' => true, 'message' => 'Already completed']);
-  }
-
-  // Admin goal check
-  $adminGoal = null;
-  if (!empty($goal['goal_id'])) {
-    $a = $pdo->prepare("SELECT reward_points, requires_approval FROM admin_goals WHERE id=?");
-    $a->execute([(int)$goal['goal_id']]);
-    $adminGoal = $a->fetch(PDO::FETCH_ASSOC);
-  }
-
-  // Approval flow
-  if ($adminGoal && (int)$adminGoal['requires_approval'] === 1) {
-    $pendingCheck = $pdo->prepare("
-      SELECT id FROM goal_progress
-      WHERE goal_id=? AND student_id=? AND status='pending'
-      LIMIT 1
+    // Fetch goal — must belong to this student
+    $stmt = $pdo->prepare("
+        SELECT * FROM student_goals
+        WHERE id = ? AND student_id = ? AND deleted_at IS NULL
     ");
-    $pendingCheck->execute([$goal_id, $student_id]);
-    if ($pendingCheck->fetch()) throw new Exception("You already have a pending request for this goal.");
+    $stmt->execute([$goal_id, $student_id]);
+    $goal = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    $pdo->prepare("
-      INSERT INTO goal_progress (goal_id, student_id, progress_value, notes, status, created_at)
-      VALUES (?, ?, ?, ?, 'pending', NOW())
-    ")->execute([$goal_id, $student_id, $progress, $notes]);
+    if (!$goal) {
+        echo json_encode(['success' => false, 'error' => 'Goal not found']);
+        exit;
+    }
+
+    if ($goal['status'] === 'completed') {
+        echo json_encode(['success' => false, 'error' => 'Goal is already completed']);
+        exit;
+    }
+
+    // Calculate new value (cap at target)
+    $new_value  = min(
+        (float) $goal['target_value'],
+        (float) $goal['current_value'] + $progress_value
+    );
+    $target     = (float) $goal['target_value'];
+    $percentage = $target > 0 ? round(($new_value / $target) * 100, 2) : 0;
+    $percentage = min(100, $percentage);
+
+    // Determine new status
+    $new_status = $goal['status'];
+    $completed_at = $goal['completed_at'];
+
+    if ($percentage >= 100) {
+        $new_status   = 'completed';
+        $completed_at = date('Y-m-d H:i:s');
+    } elseif ($new_value > 0) {
+        $new_status = 'in_progress';
+    }
+
+    $pdo->beginTransaction();
+
+    // Update student_goals
+    $update = $pdo->prepare("
+        UPDATE student_goals
+        SET current_value       = ?,
+            progress_percentage = ?,
+            status              = ?,
+            completed_at        = ?,
+            updated_at          = NOW()
+        WHERE id = ? AND student_id = ?
+    ");
+    $update->execute([
+        $new_value,
+        $percentage,
+        $new_status,
+        $completed_at,
+        $goal_id,
+        $student_id
+    ]);
+
+    // Log to progress_history
+    $log = $pdo->prepare("
+        INSERT INTO progress_history (student_id, goal_id, log_date, progress_added, notes)
+        VALUES (?, ?, CURDATE(), ?, ?)
+    ");
+    $log->execute([$student_id, $goal_id, $progress_value, $notes]);
+
+    // Also insert into goal_progress table
+    $gp = $pdo->prepare("
+        INSERT INTO goal_progress (goal_id, student_id, progress_value, notes, status)
+        VALUES (?, ?, ?, ?, 'approved')
+    ");
+    $gp->execute([$goal_id, $student_id, $progress_value, $notes]);
+
+    // Award points if completed (10 pts per completion)
+    if ($new_status === 'completed' && $goal['status'] !== 'completed') {
+        $pdo->prepare("UPDATE users SET points = points + 10 WHERE id = ?")
+            ->execute([$student_id]);
+
+        // Create completion notification
+        $pdo->prepare("
+            INSERT INTO notifications (user_id, title, message, type, related_id, related_type)
+            VALUES (?, 'Goal Completed! 🎉', ?, 'goal', ?, 'goal')
+        ")->execute([
+            $student_id,
+            "You completed your goal: \"{$goal['title']}\" (+10 points)",
+            $goal_id
+        ]);
+    }
 
     $pdo->commit();
-    jsonResponse(['success' => true, 'message' => 'Progress submitted for admin approval.', 'approval_required' => true]);
-  }
 
-  // Normal progress update
-  $target  = max(0, (float)$goal['target_value']);
-  $current = max(0, (float)$goal['current_value']);
+    // Check for new achievements
+    awardAchievements($pdo, $student_id);
 
-  $new_val = ($target > 0) ? min($current + $progress, $target) : ($current + $progress);
-  $percentage = ($target > 0) ? min((($new_val / $target) * 100), 100) : 0;
+    echo json_encode([
+        'success'   => true,
+        'new_value' => $new_value,
+        'status'    => $new_status,
+        'after'     => [
+            'progress_percentage' => $percentage,
+            'current_value'       => $new_value,
+            'status'              => $new_status,
+        ]
+    ]);
 
-  $new_val = round($new_val, 2);
-  $percentage = round($percentage, 2);
-
-  $old_status = $goal['status'] ?? 'pending';
-  $new_status = ($percentage >= 100) ? 'completed' : 'in_progress';
-
-  $st = $pdo->prepare("
-    UPDATE student_goals
-    SET current_value=?,
-        progress_percentage=?,
-        status=?,
-        updated_at=NOW(),
-        completed_at = CASE
-          WHEN ?='completed' THEN COALESCE(completed_at, NOW())
-          ELSE completed_at
-        END
-    WHERE id=? AND student_id=? AND deleted_at IS NULL
-  ");
-  $st->execute([$new_val, $percentage, $new_status, $new_status, $goal_id, $student_id]);
-
-  if ($st->rowCount() === 0) {
-    throw new Exception("Update failed: row not updated.");
-  }
-
-  $pdo->prepare("
-    INSERT INTO progress_history (student_id, goal_id, progress_added, notes, created_at)
-    VALUES (?, ?, ?, ?, NOW())
-  ")->execute([$student_id, $goal_id, $progress, $notes]);
-
-  $pdo->commit();
-
-  // Verify from DB (debug once)
-  $check = $pdo->prepare("SELECT current_value, progress_percentage, status FROM student_goals WHERE id=? AND student_id=?");
-  $check->execute([$goal_id, $student_id]);
-  $after = $check->fetch(PDO::FETCH_ASSOC);
-
-jsonResponse([
-  'success' => true,
-  'message' => ($new_status === 'completed' ? 'Goal completed!' : 'Progress updated!'),
-  'new_value' => $new_val,
-  'percentage' => $percentage,
-  'status' => $new_status
-]);
-
-
-} catch (Throwable $e) {
-  if ($pdo->inTransaction()) $pdo->rollBack();
-  jsonResponse(['success' => false, 'error' => $e->getMessage()], 400);
+} catch (Exception $e) {
+    if ($pdo->inTransaction()) $pdo->rollBack();
+    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 }

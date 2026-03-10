@@ -1,57 +1,66 @@
 <?php
-session_start();
+// api/student/goal_delete.php
+if (session_status() === PHP_SESSION_NONE) session_start();
 require_once '../../includes/db_connection.php';
 require_once '../../includes/functions.php';
-require_once '../_helpers.php';
+require_once '../../api/_helpers.php';
 
-requirePost();
-checkAuth('student');
-verifyCsrf();
+header('Content-Type: application/json');
 
-$student_id = (int)$_SESSION['user_id'];
-$goal_id    = (int)($_POST['goal_id'] ?? 0);
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'student') {
+    echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+    exit;
+}
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode(['success' => false, 'error' => 'Method not allowed']);
+    exit;
+}
+
+// CSRF check
+if (!verifyCsrf($_POST['csrf_token'] ?? '')) {
+    echo json_encode(['success' => false, 'error' => 'Invalid CSRF token']);
+    exit;
+}
+
+$student_id = (int) $_SESSION['user_id'];
+$goal_id    = (int) ($_POST['goal_id'] ?? 0);
 
 if ($goal_id <= 0) {
-    jsonResponse(['success' => false, 'error' => 'Invalid id'], 400);
+    echo json_encode(['success' => false, 'error' => 'Invalid goal ID']);
+    exit;
 }
 
-$pdo->beginTransaction();
 try {
-   $q = $pdo->prepare("
-    SELECT status, is_admin_created, is_self_created
-    FROM student_goals
-    WHERE id=? AND student_id=? AND deleted_at IS NULL
-    FOR UPDATE
-");
+    // Verify the goal belongs to this student
+    $check = $pdo->prepare("
+        SELECT id, title, is_self_created
+        FROM student_goals
+        WHERE id = ? AND student_id = ? AND deleted_at IS NULL
+    ");
+    $check->execute([$goal_id, $student_id]);
+    $goal = $check->fetch(PDO::FETCH_ASSOC);
 
-    $q->execute([$goal_id, $student_id]);
-    $g = $q->fetch(PDO::FETCH_ASSOC);
-
-    if (!$g) throw new Exception("Not found");
-
-  if ((int)($g['is_admin_created'] ?? 0) === 1) {
-
-        throw new Exception("You cannot delete admin-created goals.");
+    if (!$goal) {
+        echo json_encode(['success' => false, 'error' => 'Goal not found']);
+        exit;
     }
 
-// ✅ Rule 2: Must be self-created
-if ((int)($g['is_self_created'] ?? 0) !== 1) {
-    throw new Exception("You can only delete your own created goals.");
-}
-
-if (($g['status'] ?? '') !== 'completed') {
-    throw new Exception("You can only delete a goal after it is completed.");
-}
-
-    $pdo->prepare("
+    // Soft delete — sets deleted_at instead of removing the row
+    // This preserves progress history integrity
+    $stmt = $pdo->prepare("
         UPDATE student_goals
-        SET deleted_at = NOW()
-        WHERE id=? AND student_id=? AND deleted_at IS NULL
-    ")->execute([$goal_id, $student_id]);
+        SET deleted_at = NOW(),
+            updated_at = NOW()
+        WHERE id = ? AND student_id = ?
+    ");
+    $stmt->execute([$goal_id, $student_id]);
 
-    $pdo->commit();
-    jsonResponse(['success' => true, 'message' => 'Goal deleted']);
-} catch (Throwable $e) {
-    $pdo->rollBack();
-    jsonResponse(['success' => false, 'error' => $e->getMessage()], 400);
+    echo json_encode([
+        'success' => true,
+        'message' => "Goal \"{$goal['title']}\" deleted successfully"
+    ]);
+
+} catch (Exception $e) {
+    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 }

@@ -1,21 +1,32 @@
 <?php
+// FIX 1: session_start() MUST be at the very top before any output
+// Original file was missing this — auto-login after registration silently failed
+session_start();
 require_once 'includes/db_connection.php';
 
-$error = '';
+// If already logged in, redirect away
+if (isset($_SESSION['user_id'])) {
+    header("Location: " . ($_SESSION['role'] === 'admin' ? 'admin/admin.php' : 'students/dashboard.php'));
+    exit;
+}
+
+$error   = '';
 $success = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $name = $_POST['name'] ?? '';
-    $email = $_POST['email'] ?? '';
-    $student_id = $_POST['student_id'] ?? '';
-    $department = $_POST['department'] ?? '';
-    $semester = $_POST['semester'] ?? '';
-    $password = $_POST['password'] ?? '';
+    $name             = trim($_POST['name']             ?? '');
+    $email            = trim($_POST['email']            ?? '');
+    $student_id       = trim($_POST['student_id']       ?? '');
+    $department       = trim($_POST['department']       ?? '');
+    $semester         = trim($_POST['semester']         ?? '');
+    $password         = $_POST['password']         ?? '';
     $confirm_password = $_POST['confirm_password'] ?? '';
 
     // Validation
     if (empty($name) || empty($email) || empty($password)) {
         $error = "Please fill in all required fields.";
+    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $error = "Please enter a valid email address.";
     } elseif ($password !== $confirm_password) {
         $error = "Passwords do not match.";
     } elseif (strlen($password) < 6) {
@@ -27,36 +38,52 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             $check_stmt->execute([$email]);
 
             if ($check_stmt->fetch()) {
-                $error = "Email already registered.";
+                $error = "Email already registered. Please use a different email or log in.";
             } else {
-                // Hash password
-                $hashed_password = password_hash($password, PASSWORD_BCRYPT);
+                // Check student_id uniqueness only if provided
+                if (!empty($student_id)) {
+                    $sid_check = $pdo->prepare("SELECT id FROM users WHERE student_id = ?");
+                    $sid_check->execute([$student_id]);
+                    if ($sid_check->fetch()) {
+                        $error = "Student ID already in use. Please check your ID or leave it blank.";
+                    }
+                }
 
-                // Insert user
-                $stmt = $pdo->prepare("
-                    INSERT INTO users (name, email, student_id, department, semester, password, role, status)
-                    VALUES (?, ?, ?, ?, ?, ?, 'student', 'active')
-                ");
-                $stmt->execute([$name, $email, $student_id, $department, $semester, $hashed_password]);
+                if (empty($error)) {
+                    // Hash password securely
+                    $hashed_password = password_hash($password, PASSWORD_BCRYPT);
 
-                $user_id = $pdo->lastInsertId();
+                    // Insert user — trigger will handle welcome notification,
+                    // achievement, and auto-assign admin goals
+                    $stmt = $pdo->prepare("
+                        INSERT INTO users (name, email, student_id, department, semester, password, role, status)
+                        VALUES (?, ?, ?, ?, ?, ?, 'student', 'active')
+                    ");
+                    $stmt->execute([
+                        $name,
+                        $email,
+                        !empty($student_id) ? $student_id : null,  // NULL if blank (avoids unique key conflict)
+                        $department,
+                        $semester,
+                        $hashed_password
+                    ]);
 
-                // Auto-login after registration
-                $_SESSION['user_id'] = $user_id;
-                $_SESSION['name'] = $name;
-                $_SESSION['email'] = $email;
-                $_SESSION['role'] = 'student';
+                    $user_id = $pdo->lastInsertId();
 
-                // Send welcome notification
-                $notif_stmt = $pdo->prepare("
-                    INSERT INTO notifications (user_id, title, message, type)
-                    VALUES (?, 'Welcome to ProgressMate!', 'Start tracking your goals and achieve success.', 'system')
-                ");
-                $notif_stmt->execute([$user_id]);
+                    // FIX 2: session_start() is now at top so this actually works
+                    $_SESSION['user_id']         = $user_id;
+                    $_SESSION['name']            = $name;
+                    $_SESSION['email']           = $email;
+                    $_SESSION['role']            = 'student';
+                    $_SESSION['profile_picture'] = null;
 
-                // Redirect to STUDENTS dashboard - CORRECTED
-                header("Location: students/dashboard.php");
-                exit;
+                    // Update last_login
+                    $pdo->prepare("UPDATE users SET last_login = NOW() WHERE id = ?")->execute([$user_id]);
+
+                    // FIX 3: consistent redirect path (was 'students/dashboard.php', matches login.php)
+                    header("Location: students/dashboard.php");
+                    exit;
+                }
             }
         } catch (Exception $e) {
             $error = "Registration failed: " . $e->getMessage();
@@ -104,15 +131,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
 
         @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+            from { opacity: 0; transform: translateY(20px); }
+            to   { opacity: 1; transform: translateY(0);    }
         }
 
         .logo {
@@ -165,6 +185,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             top: 50%;
             transform: translateY(-50%);
             color: #999;
+            pointer-events: none;
         }
 
         .input-with-icon input,
@@ -175,6 +196,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             border-radius: 10px;
             font-size: 16px;
             transition: all 0.3s;
+            background: white;
         }
 
         .input-with-icon input:focus,
@@ -190,10 +212,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             gap: 20px;
         }
 
-        @media (max-width: 768px) {
-            .form-row {
-                grid-template-columns: 1fr;
-            }
+        @media (max-width: 480px) {
+            .form-row { grid-template-columns: 1fr; }
+            .register-card { padding: 25px; }
         }
 
         .btn-register {
@@ -219,9 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
         }
 
-        .btn-register:active {
-            transform: translateY(0);
-        }
+        .btn-register:active { transform: translateY(0); }
 
         .error-message {
             background: #fee;
@@ -236,7 +255,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         .success-message {
             background: #efe;
-            color: #3c3;
+            color: #363;
             padding: 12px;
             border-radius: 8px;
             margin-bottom: 20px;
@@ -258,26 +277,16 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
             font-size: 14px;
         }
 
-        .links a:hover {
-            text-decoration: underline;
-        }
+        .links a:hover { text-decoration: underline; }
 
         .password-strength {
             margin-top: 5px;
             font-size: 12px;
         }
 
-        .strength-weak {
-            color: #ff4444;
-        }
-
-        .strength-medium {
-            color: #ffaa00;
-        }
-
-        .strength-strong {
-            color: #00C851;
-        }
+        .strength-weak   { color: #ff4444; }
+        .strength-medium { color: #ffaa00; }
+        .strength-strong { color: #00C851; }
     </style>
 </head>
 
@@ -304,13 +313,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                 </div>
             <?php endif; ?>
 
-            <form method="POST" action="">
+            <form method="POST" action="" novalidate>
                 <div class="form-row">
                     <div class="form-group">
                         <label for="name" class="required">Full Name</label>
                         <div class="input-with-icon">
                             <i class="fas fa-user"></i>
-                            <input type="text" id="name" name="name" placeholder="John Doe" required>
+                            <input type="text" id="name" name="name"
+                                   value="<?php echo htmlspecialchars($_POST['name'] ?? ''); ?>"
+                                   placeholder="John Doe" required>
                         </div>
                     </div>
 
@@ -318,17 +329,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         <label for="email" class="required">Email Address</label>
                         <div class="input-with-icon">
                             <i class="fas fa-envelope"></i>
-                            <input type="email" id="email" name="email" placeholder="john@example.com" required>
+                            <input type="email" id="email" name="email"
+                                   value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>"
+                                   placeholder="john@example.com" required>
                         </div>
                     </div>
                 </div>
 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="student_id">Student ID</label>
+                        <label for="student_id">Student ID <small style="color:#999">(optional)</small></label>
                         <div class="input-with-icon">
                             <i class="fas fa-id-card"></i>
-                            <input type="text" id="student_id" name="student_id" placeholder="Optional">
+                            <input type="text" id="student_id" name="student_id"
+                                   value="<?php echo htmlspecialchars($_POST['student_id'] ?? ''); ?>"
+                                   placeholder="e.g. STU006">
                         </div>
                     </div>
 
@@ -336,7 +351,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         <label for="department">Department</label>
                         <div class="input-with-icon">
                             <i class="fas fa-building"></i>
-                            <input type="text" id="department" name="department" placeholder="Computer Science">
+                            <input type="text" id="department" name="department"
+                                   value="<?php echo htmlspecialchars($_POST['department'] ?? ''); ?>"
+                                   placeholder="Computer Science">
                         </div>
                     </div>
                 </div>
@@ -349,7 +366,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                             <select id="semester" name="semester">
                                 <option value="">Select Semester</option>
                                 <?php for ($i = 1; $i <= 8; $i++): ?>
-                                    <option value="<?php echo $i; ?>">Semester <?php echo $i; ?></option>
+                                    <option value="<?php echo $i; ?>"
+                                        <?php echo (($_POST['semester'] ?? '') == $i) ? 'selected' : ''; ?>>
+                                        Semester <?php echo $i; ?>
+                                    </option>
                                 <?php endfor; ?>
                             </select>
                         </div>
@@ -361,7 +381,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         <label for="password" class="required">Password</label>
                         <div class="input-with-icon">
                             <i class="fas fa-lock"></i>
-                            <input type="password" id="password" name="password" placeholder="At least 6 characters" required>
+                            <input type="password" id="password" name="password"
+                                   placeholder="At least 6 characters" required>
                         </div>
                         <div id="password-strength" class="password-strength"></div>
                     </div>
@@ -370,7 +391,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
                         <label for="confirm_password" class="required">Confirm Password</label>
                         <div class="input-with-icon">
                             <i class="fas fa-lock"></i>
-                            <input type="password" id="confirm_password" name="confirm_password" placeholder="Confirm your password" required>
+                            <input type="password" id="confirm_password" name="confirm_password"
+                                   placeholder="Repeat your password" required>
                         </div>
                         <div id="password-match" class="password-strength"></div>
                     </div>
@@ -389,90 +411,63 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     </div>
 
     <script>
-        // Password strength checker
-        const passwordInput = document.getElementById('password');
-        const confirmInput = document.getElementById('confirm_password');
+        const passwordInput  = document.getElementById('password');
+        const confirmInput   = document.getElementById('confirm_password');
         const strengthDisplay = document.getElementById('password-strength');
-        const matchDisplay = document.getElementById('password-match');
+        const matchDisplay   = document.getElementById('password-match');
 
-        passwordInput.addEventListener('input', function() {
-            const password = this.value;
-            let strength = '';
-            let color = '';
+        passwordInput.addEventListener('input', function () {
+            const pw = this.value;
+            let strength = '', cls = '';
 
-            if (password.length === 0) {
+            if (pw.length === 0) {
                 strength = '';
-            } else if (password.length < 6) {
-                strength = 'Weak (too short)';
-                color = 'strength-weak';
-            } else if (password.length < 8) {
-                strength = 'Medium';
-                color = 'strength-medium';
+            } else if (pw.length < 6) {
+                strength = 'Too short (min 6 chars)'; cls = 'strength-weak';
             } else {
-                // Check for mixed case, numbers, and special chars
-                const hasUpper = /[A-Z]/.test(password);
-                const hasLower = /[a-z]/.test(password);
-                const hasNumbers = /\d/.test(password);
-                const hasSpecial = /[^A-Za-z0-9]/.test(password);
-
-                const complexity = [hasUpper, hasLower, hasNumbers, hasSpecial].filter(Boolean).length;
-
-                if (complexity >= 3) {
-                    strength = 'Strong';
-                    color = 'strength-strong';
-                } else if (complexity >= 2) {
-                    strength = 'Medium';
-                    color = 'strength-medium';
-                } else {
-                    strength = 'Weak';
-                    color = 'strength-weak';
-                }
+                const score = [/[A-Z]/, /[a-z]/, /\d/, /[^A-Za-z0-9]/].filter(r => r.test(pw)).length;
+                if (score >= 3)      { strength = '✓ Strong';  cls = 'strength-strong'; }
+                else if (score >= 2) { strength = '~ Medium';  cls = 'strength-medium'; }
+                else                 { strength = '✗ Weak';    cls = 'strength-weak';   }
             }
 
-            strengthDisplay.textContent = strength;
-            strengthDisplay.className = 'password-strength ' + color;
-
-            // Check password match
-            checkPasswordMatch();
+            strengthDisplay.textContent  = strength;
+            strengthDisplay.className    = 'password-strength ' + cls;
+            checkMatch();
         });
 
-        confirmInput.addEventListener('input', checkPasswordMatch);
+        confirmInput.addEventListener('input', checkMatch);
 
-        function checkPasswordMatch() {
-            const password = passwordInput.value;
-            const confirm = confirmInput.value;
-
-            if (confirm.length === 0) {
-                matchDisplay.textContent = '';
-            } else if (password === confirm) {
+        function checkMatch() {
+            const pw  = passwordInput.value;
+            const cfm = confirmInput.value;
+            if (!cfm) { matchDisplay.textContent = ''; return; }
+            if (pw === cfm) {
                 matchDisplay.textContent = '✓ Passwords match';
-                matchDisplay.className = 'password-strength strength-strong';
+                matchDisplay.className   = 'password-strength strength-strong';
             } else {
                 matchDisplay.textContent = '✗ Passwords do not match';
-                matchDisplay.className = 'password-strength strength-weak';
+                matchDisplay.className   = 'password-strength strength-weak';
             }
         }
 
-        // Form validation
-        document.querySelector('form').addEventListener('submit', function(e) {
-            const name = document.getElementById('name').value;
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            const confirm = document.getElementById('confirm_password').value;
+        document.querySelector('form').addEventListener('submit', function (e) {
+            const name    = document.getElementById('name').value.trim();
+            const email   = document.getElementById('email').value.trim();
+            const pw      = passwordInput.value;
+            const cfm     = confirmInput.value;
 
-            if (!name || !email || !password || !confirm) {
+            if (!name || !email || !pw || !cfm) {
                 e.preventDefault();
                 alert('Please fill in all required fields.');
                 return false;
             }
-
-            if (password !== confirm) {
+            if (pw !== cfm) {
                 e.preventDefault();
                 alert('Passwords do not match.');
                 return false;
             }
-
-            if (password.length < 6) {
+            if (pw.length < 6) {
                 e.preventDefault();
                 alert('Password must be at least 6 characters.');
                 return false;
@@ -480,5 +475,4 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
         });
     </script>
 </body>
-
 </html>

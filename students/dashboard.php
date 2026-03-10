@@ -9,66 +9,77 @@ checkAuth('student');
 
 $student_id = $_SESSION['user_id'];
 
-// ====== Sidebar Stats ======
-$total_goals = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=?", [$student_id]);
-$completed_goals = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='completed'", [$student_id]);
-$in_progress_goals = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='in_progress'", [$student_id]);
-$total_points = getStat($pdo, "SELECT points FROM users WHERE id=?", [$student_id], 0);
-$streak = getStat($pdo, "SELECT current_streak FROM users WHERE id=?", [$student_id], 0);
-$unread = getStat($pdo, "SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0", [$student_id]);
+// Update login streak
+updateLoginStreak($pdo, $student_id);
+
+// ====== Stats (all from DB) ======
+$total_goals      = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND deleted_at IS NULL", [$student_id]);
+$completed_goals  = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='completed' AND deleted_at IS NULL", [$student_id]);
+$in_progress_goals= getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='in_progress' AND deleted_at IS NULL", [$student_id]);
+$total_points     = getStat($pdo, "SELECT COALESCE(points,0) FROM users WHERE id=?", [$student_id]);
+$streak           = getStat($pdo, "SELECT COALESCE(current_streak,0) FROM users WHERE id=?", [$student_id]);
+$unread           = getStat($pdo, "SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0 AND deleted_at IS NULL", [$student_id]);
+$earned_achievements = getStat($pdo, "SELECT COUNT(*) FROM user_achievements WHERE user_id=? AND earned_at IS NOT NULL", [$student_id]);
 
 // ====== Recent Goals (last 5) ======
 $recent_stmt = $pdo->prepare("
-    SELECT * FROM student_goals 
-    WHERE student_id=?
-    ORDER BY created_at DESC
+    SELECT * FROM student_goals
+    WHERE student_id=? AND deleted_at IS NULL
+    ORDER BY updated_at DESC
     LIMIT 5
 ");
 $recent_stmt->execute([$student_id]);
 $recent_goals = $recent_stmt->fetchAll();
 
-// ====== Upcoming Deadlines (next 7 days) ======
+// ====== Upcoming Deadlines (next 14 days, not completed) ======
 $upcoming_stmt = $pdo->prepare("
-    SELECT * FROM student_goals
-    WHERE student_id=? AND due_date >= CURDATE()
+    SELECT *, DATEDIFF(due_date, CURDATE()) AS days_left
+    FROM student_goals
+    WHERE student_id=?
+      AND deleted_at IS NULL
+      AND status NOT IN ('completed')
+      AND due_date IS NOT NULL
+      AND due_date >= CURDATE()
     ORDER BY due_date ASC
     LIMIT 5
 ");
 $upcoming_stmt->execute([$student_id]);
 $upcoming_deadlines = $upcoming_stmt->fetchAll();
 
-// ====== Recent Achievements (last 5) ======
+// ====== Recent Achievements (last 4 earned) ======
 $achievements_stmt = $pdo->prepare("
-    SELECT a.*, ua.earned_at
-    FROM achievements a
-    LEFT JOIN user_achievements ua 
-    ON a.id=ua.achievement_id AND ua.user_id=?
-    ORDER BY a.created_at DESC
-    LIMIT 5
+    SELECT a.title, a.icon, a.color, a.points, ua.earned_at
+    FROM user_achievements ua
+    JOIN achievements a ON a.id = ua.achievement_id
+    WHERE ua.user_id=? AND ua.earned_at IS NOT NULL
+    ORDER BY ua.earned_at DESC
+    LIMIT 4
 ");
 $achievements_stmt->execute([$student_id]);
 $recent_achievements = $achievements_stmt->fetchAll();
 
 // ====== Recent Notifications (last 5) ======
 $notif_stmt = $pdo->prepare("
-    SELECT * FROM notifications 
-    WHERE user_id=? 
+    SELECT * FROM notifications
+    WHERE user_id=? AND deleted_at IS NULL
     ORDER BY created_at DESC
     LIMIT 5
 ");
 $notif_stmt->execute([$student_id]);
 $notifications = $notif_stmt->fetchAll();
 
-// ====== Weekly Progress for Chart ======
+// ====== Weekly Progress Chart (last 7 days) ======
 $progress_stmt = $pdo->prepare("
     SELECT log_date, SUM(progress_added) AS total
     FROM progress_history
     WHERE student_id=?
+      AND log_date >= CURDATE() - INTERVAL 7 DAY
     GROUP BY log_date
     ORDER BY log_date ASC
 ");
 $progress_stmt->execute([$student_id]);
 $progress_data = $progress_stmt->fetchAll(PDO::FETCH_ASSOC);
+
 $current = basename($_SERVER['PHP_SELF']);
 ?>
 
@@ -746,12 +757,6 @@ $current = basename($_SERVER['PHP_SELF']);
             </div>
 
             <div class="user-profile">
-                <!-- simulate session data -->
-                <?php
-                $_SESSION['profile_picture'] = ''; // empty for default
-                $current = basename($_SERVER['PHP_SELF']); // but we'll set manually via dummy var
-                $current = 'dashboard.php'; // mock
-                ?>
                 <?php if (!empty($_SESSION['profile_picture'])): ?>
                     <img src="../<?php echo htmlspecialchars($_SESSION['profile_picture']); ?>" alt="Profile" class="profile-pic">
                 <?php else: ?>
@@ -772,27 +777,26 @@ $current = basename($_SERVER['PHP_SELF']);
                 <a href="profile.php" class="nav-link <?php echo ($current=='profile.php')?'active':''; ?>"><i class="fas fa-user"></i> Profile</a>
             </nav>
 
-            <!-- quick stats with dummy numbers -->
             <div class="sidebar-quick-stats">
                 <div class="sidebar-stat">
                     <div class="sidebar-stat-icon"><i class="fas fa-bullseye"></i></div>
                     <div class="sidebar-stat-info">
-                        <div class="sidebar-stat-label">Goals Score</div>
-                        <div class="sidebar-stat-number">8/12</div>
+                        <div class="sidebar-stat-label">Goals</div>
+                        <div class="sidebar-stat-number"><?php echo $completed_goals; ?>/<?php echo $total_goals; ?></div>
                     </div>
                 </div>
                 <div class="sidebar-stat">
                     <div class="sidebar-stat-icon"><i class="fas fa-star"></i></div>
                     <div class="sidebar-stat-info">
                         <div class="sidebar-stat-label">Points</div>
-                        <div class="sidebar-stat-number">1450</div>
+                        <div class="sidebar-stat-number"><?php echo $total_points; ?></div>
                     </div>
                 </div>
                 <div class="sidebar-stat">
                     <div class="sidebar-stat-icon"><i class="fas fa-fire"></i></div>
                     <div class="sidebar-stat-info">
                         <div class="sidebar-stat-label">Streak</div>
-                        <div class="sidebar-stat-number">12 days</div>
+                        <div class="sidebar-stat-number"><?php echo $streak; ?> days</div>
                     </div>
                 </div>
             </div>
@@ -807,84 +811,155 @@ $current = basename($_SERVER['PHP_SELF']);
             <!-- HEADER -->
             <header class="page-header">
                 <div class="header-content">
-                    <h1>Welcome back, Alex!</h1>
-                    <p>Track your progress and achieve your goals</p>
+                    <h1>Welcome back, <?php echo htmlspecialchars($_SESSION['name']); ?>!</h1>
+                    <p><?php echo date('l, F j, Y'); ?> &nbsp;·&nbsp; <?php echo $streak; ?>-day streak &nbsp;·&nbsp; <?php echo $unread; ?> unread notification<?php echo $unread != 1 ? 's' : ''; ?></p>
                 </div>
                 <div class="header-actions">
-                    <a href="create_goal.php" class="btn btn-primary"><i class="fas fa-plus"></i> Create Goal</a>
+                    <a href="achievements.php" class="btn btn-primary"><i class="fas fa-trophy"></i> View Achievements</a>
                 </div>
             </header>
 
-            <!-- STATS (dummy) -->
+            <!-- STATS -->
             <div class="stats-grid">
-                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-bullseye"></i></div><div><div class="stat-number">12</div><div class="stat-label">Total Goals</div></div></div></div>
-                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-check-circle"></i></div><div><div class="stat-number">8</div><div class="stat-label">Completed</div></div></div></div>
-                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-spinner"></i></div><div><div class="stat-number">3</div><div class="stat-label">In Progress</div></div></div></div>
-                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-star"></i></div><div><div class="stat-number">1450</div><div class="stat-label">Total Points</div></div></div></div>
+                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-bullseye"></i></div><div><div class="stat-number"><?php echo $total_goals; ?></div><div class="stat-label">Total Goals</div></div></div></div>
+                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-check-circle"></i></div><div><div class="stat-number"><?php echo $completed_goals; ?></div><div class="stat-label">Completed</div></div></div></div>
+                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-spinner"></i></div><div><div class="stat-number"><?php echo $in_progress_goals; ?></div><div class="stat-label">In Progress</div></div></div></div>
+                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-star"></i></div><div><div class="stat-number"><?php echo $total_points; ?></div><div class="stat-label">Total Points</div></div></div></div>
             </div>
 
-            <!-- CONTENT GRID (two columns) -->
+            <!-- CONTENT GRID -->
             <div class="content-grid">
+
                 <!-- RECENT GOALS CARD -->
                 <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-bullseye"></i> Recent Goals</h3><a href="goals.php" style="color:#4f46e5;">View All</a></div>
+                    <div class="card-header">
+                        <h3><i class="fas fa-bullseye"></i> Recent Goals</h3>
+                        <a href="goals.php" style="color:#22d3ee; font-size:13px;">View All</a>
+                    </div>
                     <div class="card-body">
-                        <div class="goals-list">
-                            <!-- dummy goal 1 -->
-                            <div class="goal-item">
-                                <div class="goal-header"><div><div class="goal-title">Complete Math Assignment</div><div class="goal-date">Due: Jun 25, 2025</div></div><span class="goal-status">in progress</span></div>
-                                <div class="progress-bar"><div class="progress-fill" style="width:65%"></div></div><div style="font-size:12px; color:var(--muted); text-align:right;">65% Complete</div>
+                        <?php if (empty($recent_goals)): ?>
+                            <div class="empty-state"><i class="fas fa-bullseye"></i><p>No goals yet. <a href="create_goal.php" style="color:#22d3ee;">Create one!</a></p></div>
+                        <?php else: ?>
+                            <div class="goals-list">
+                                <?php foreach ($recent_goals as $g):
+                                    $pct = round($g['progress_percentage'], 1);
+                                ?>
+                                    <div class="goal-item">
+                                        <div class="goal-header">
+                                            <div>
+                                                <div class="goal-title"><?php echo htmlspecialchars($g['title']); ?></div>
+                                                <?php if ($g['due_date']): ?>
+                                                    <div class="goal-date">Due: <?php echo date('M j, Y', strtotime($g['due_date'])); ?></div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <span class="goal-status status-<?php echo $g['status']; ?>"><?php echo ucfirst(str_replace('_',' ',$g['status'])); ?></span>
+                                        </div>
+                                        <div class="progress-bar"><div class="progress-fill" style="width:<?php echo $pct; ?>%"></div></div>
+                                        <div style="font-size:12px; color:var(--muted); text-align:right;"><?php echo $pct; ?>% Complete</div>
+                                    </div>
+                                <?php endforeach; ?>
                             </div>
-                            <div class="goal-item">
-                                <div class="goal-header"><div><div class="goal-title">Read 5 research papers</div><div class="goal-date">Due: Jun 28, 2025</div></div><span class="goal-status">pending</span></div>
-                                <div class="progress-bar"><div class="progress-fill" style="width:20%"></div></div><div style="font-size:12px; color:var(--muted); text-align:right;">20% Complete</div>
-                            </div>
-                            <div class="goal-item">
-                                <div class="goal-header"><div><div class="goal-title">Team project prototype</div><div class="goal-date">Due: Jul 02, 2025</div></div><span class="goal-status">completed</span></div>
-                                <div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div><div style="font-size:12px; color:var(--muted); text-align:right;">100% Complete</div>
-                            </div>
-                        </div>
+                        <?php endif; ?>
                     </div>
                 </div>
 
-                <!-- PROGRESS GRAPH CARD (with Chart.js dummy) -->
+                <!-- WEEKLY PROGRESS CHART -->
                 <div class="card">
                     <div class="card-header"><h3><i class="fas fa-chart-line"></i> Weekly Progress</h3></div>
                     <div class="card-body"><canvas id="progressChart" style="height:200px; width:100%;"></canvas></div>
                 </div>
 
-                <!-- UPCOMING DEADLINES (spans both columns via grid, but we can adjust) -->
-                <div class="card" style="grid-column: span 1;">
-                    <div class="card-header"><h3><i class="fas fa-calendar"></i> Upcoming Deadlines</h3></div>
+                <!-- UPCOMING DEADLINES -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3><i class="fas fa-calendar"></i> Upcoming Deadlines</h3>
+                        <a href="goals.php" style="color:#22d3ee; font-size:13px;">View All</a>
+                    </div>
                     <div class="card-body">
-                        <div class="goal-item warning"><div class="goal-header"><div><div class="goal-title">Physics Lab Report</div><div class="goal-date">1 day remaining</div></div></div><div class="progress-bar"><div class="progress-fill" style="width:80%"></div></div></div>
-                        <div class="goal-item"><div class="goal-header"><div><div class="goal-title">Literature essay</div><div class="goal-date">3 days remaining</div></div></div><div class="progress-bar"><div class="progress-fill" style="width:35%"></div></div></div>
+                        <?php if (empty($upcoming_deadlines)): ?>
+                            <div class="empty-state"><i class="fas fa-calendar-check"></i><p>No upcoming deadlines</p></div>
+                        <?php else: ?>
+                            <?php foreach ($upcoming_deadlines as $g):
+                                $days = (int)$g['days_left'];
+                                $urgency = $days <= 1 ? 'color:#fb7185;' : ($days <= 3 ? 'color:#fbbf24;' : '');
+                                $pct = round($g['progress_percentage'], 1);
+                            ?>
+                                <div class="goal-item">
+                                    <div class="goal-header">
+                                        <div>
+                                            <div class="goal-title"><?php echo htmlspecialchars($g['title']); ?></div>
+                                            <div class="goal-date" style="<?php echo $urgency; ?>">
+                                                <?php echo $days === 0 ? 'Due today!' : $days . ' day' . ($days != 1 ? 's' : '') . ' left'; ?>
+                                            </div>
+                                        </div>
+                                        <span class="goal-status status-<?php echo $g['status']; ?>"><?php echo ucfirst(str_replace('_',' ',$g['status'])); ?></span>
+                                    </div>
+                                    <div class="progress-bar"><div class="progress-fill" style="width:<?php echo $pct; ?>%"></div></div>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
                     </div>
                 </div>
 
                 <!-- RECENT ACHIEVEMENTS -->
                 <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-trophy"></i> Recent Achievements</h3><a href="achievements.php" style="color:#4f46e5;">View All</a></div>
+                    <div class="card-header">
+                        <h3><i class="fas fa-trophy"></i> Recent Achievements</h3>
+                        <a href="achievements.php" style="color:#22d3ee; font-size:13px;">View All</a>
+                    </div>
                     <div class="card-body">
-                        <div class="achievements-grid">
-                            <div class="achievement-item"><div class="achievement-icon" style="background:#f59e0b;"><i class="fas fa-rocket"></i></div><div class="achievement-title">Quick Starter</div><div class="achievement-points">100 pts</div></div>
-                            <div class="achievement-item"><div class="achievement-icon" style="background:#10b981;"><i class="fas fa-check-double"></i></div><div class="achievement-title">Goal Crusher</div><div class="achievement-points">250 pts</div></div>
-                            <div class="achievement-item"><div class="achievement-icon" style="background:#8b5cf6;"><i class="fas fa-fire"></i></div><div class="achievement-title">7‑day streak</div><div class="achievement-points">70 pts</div></div>
-                        </div>
+                        <?php if (empty($recent_achievements)): ?>
+                            <div class="empty-state"><i class="fas fa-trophy"></i><p>No achievements yet. Complete goals to earn them!</p></div>
+                        <?php else: ?>
+                            <div class="achievements-grid">
+                                <?php foreach ($recent_achievements as $a): ?>
+                                    <div class="achievement-item">
+                                        <div class="achievement-icon" style="background:<?php echo htmlspecialchars($a['color'] ?? '#667eea'); ?>;">
+                                            <i class="<?php echo htmlspecialchars($a['icon'] ?? 'fas fa-star'); ?>"></i>
+                                        </div>
+                                        <div class="achievement-title"><?php echo htmlspecialchars($a['title']); ?></div>
+                                        <div class="achievement-points"><?php echo $a['points']; ?> pts</div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
 
                 <!-- RECENT NOTIFICATIONS -->
                 <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-bell"></i> Recent Notifications</h3><a href="notifications.php" style="color:#4f46e5;">View All</a></div>
+                    <div class="card-header">
+                        <h3><i class="fas fa-bell"></i> Recent Notifications</h3>
+                        <a href="notifications.php" style="color:#22d3ee; font-size:13px;">View All</a>
+                    </div>
                     <div class="card-body">
-                        <div class="notifications-list">
-                            <div class="notification-item unread"><div class="notification-icon"><i class="fas fa-bullseye"></i></div><div class="notification-content"><div class="notification-title">Goal almost due</div><div class="notification-message">Math assignment deadline tomorrow</div><div class="notification-time">Today, 2:30 PM</div></div></div>
-                            <div class="notification-item"><div class="notification-icon"><i class="fas fa-trophy"></i></div><div class="notification-content"><div class="notification-title">Achievement unlocked</div><div class="notification-message">You earned 'Quick Starter'</div><div class="notification-time">Yesterday</div></div></div>
-                            <div class="notification-item"><div class="notification-icon"><i class="fas fa-info-circle"></i></div><div class="notification-content"><div class="notification-title">New goal available</div><div class="notification-message">Check optional coding challenge</div><div class="notification-time">Jun 20</div></div></div>
-                        </div>
+                        <?php if (empty($notifications)): ?>
+                            <div class="empty-state"><i class="fas fa-bell-slash"></i><p>No notifications yet</p></div>
+                        <?php else: ?>
+                            <div class="notifications-list">
+                                <?php foreach ($notifications as $n):
+                                    $icon = match($n['type']) {
+                                        'achievement' => 'fas fa-trophy',
+                                        'goal'        => 'fas fa-bullseye',
+                                        'reminder'    => 'fas fa-clock',
+                                        default       => 'fas fa-info-circle'
+                                    };
+                                    $is_unread = !$n['is_read'];
+                                ?>
+                                    <div class="notification-item <?php echo $is_unread ? 'unread' : ''; ?>">
+                                        <div class="notification-icon"><i class="<?php echo $icon; ?>"></i></div>
+                                        <div class="notification-content">
+                                            <div class="notification-title"><?php echo htmlspecialchars($n['title']); ?></div>
+                                            <div class="notification-message"><?php echo htmlspecialchars(mb_strimwidth($n['message'], 0, 80, '...')); ?></div>
+                                            <div class="notification-time"><?php echo date('M j, g:i A', strtotime($n['created_at'])); ?></div>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
+
             </div>
 
             <!-- QUICK ACTIONS -->
@@ -935,30 +1010,7 @@ if (overlay) {
             if (window.innerWidth > 860) sidebar.classList.remove('active');
         });
 
-        // dummy chart
-        const ctx = document.getElementById('progressChart')?.getContext('2d');
-        if(ctx) {
-            new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-                    datasets: [{
-                        label: 'Progress %',
-                        data: [20, 35, 50, 48, 68, 82, 75],
-                        borderColor: '#4f46e5',
-                        backgroundColor: 'rgba(79,70,229,0.2)',
-                        fill: true,
-                        tension: 0.4
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    animation: { duration: 1500 },
-                    scales: { y: { beginAtZero: true, max:100 } },
-                    plugins: { legend: { display: false } }
-                }
-            });
-        }
+        // chart rendered by PHP data block above
 
         // progress bars animation
         document.querySelectorAll('.progress-fill').forEach(bar => {

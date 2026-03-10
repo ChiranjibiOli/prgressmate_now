@@ -1,98 +1,117 @@
 <?php
-session_start();
+// api/student/goal_edit.php
+if (session_status() === PHP_SESSION_NONE) session_start();
 require_once '../../includes/db_connection.php';
 require_once '../../includes/functions.php';
-require_once '../_helpers.php';
+require_once '../../api/_helpers.php';
 
-requirePost();
-checkAuth('student');
-verifyCsrf();
+header('Content-Type: application/json');
 
-$student_id = (int)($_SESSION['user_id'] ?? 0);
-$goal_id    = (int)($_POST['goal_id'] ?? 0);
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'student') {
+    echo json_encode(['success' => false, 'error' => 'Unauthorized']);
+    exit;
+}
 
-$title        = trim($_POST['title'] ?? '');
-$description  = trim($_POST['description'] ?? '');
-$category     = trim($_POST['category'] ?? '');
-$priority     = $_POST['priority'] ?? 'medium';
-$target_value = (float)($_POST['target_value'] ?? 0);
-$unit         = trim($_POST['unit'] ?? '');
-$due_date     = trim($_POST['due_date'] ?? '');
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    echo json_encode(['success' => false, 'error' => 'Method not allowed']);
+    exit;
+}
 
-if ($student_id <= 0) jsonResponse(['success' => false, 'error' => 'Unauthorized'], 401);
-if ($goal_id <= 0) jsonResponse(['success' => false, 'error' => 'Invalid id'], 400);
-if ($title === '') jsonResponse(['success' => false, 'error' => 'Title required'], 400);
-if (!in_array($priority, ['low', 'medium', 'high'], true)) $priority = 'medium';
-if ($target_value <= 0) jsonResponse(['success' => false, 'error' => 'Target value must be > 0'], 400);
+// CSRF check
+if (!verifyCsrf($_POST['csrf_token'] ?? '')) {
+    echo json_encode(['success' => false, 'error' => 'Invalid CSRF token']);
+    exit;
+}
 
-// Normalize optional fields to NULL
-$description = ($description === '') ? null : $description;
-$category    = ($category === '') ? null : $category;
-$unit        = ($unit === '') ? null : $unit;
-$due_date    = ($due_date === '') ? null : $due_date;
+$student_id  = (int) $_SESSION['user_id'];
+$goal_id     = (int) ($_POST['goal_id'] ?? 0);
+$title       = trim($_POST['title']       ?? '');
+$description = trim($_POST['description'] ?? '');
+$category    = trim($_POST['category']    ?? '');
+$priority    = trim($_POST['priority']    ?? 'medium');
+$unit        = trim($_POST['unit']        ?? '');
+$target_raw  = $_POST['target_value']     ?? '';
+$due_date    = trim($_POST['due_date']    ?? '');
 
-$pdo->beginTransaction();
+// Validate
+if ($goal_id <= 0) {
+    echo json_encode(['success' => false, 'error' => 'Invalid goal ID']);
+    exit;
+}
+if (empty($title)) {
+    echo json_encode(['success' => false, 'error' => 'Title is required']);
+    exit;
+}
+$target_value = (float) $target_raw;
+if ($target_value <= 0) {
+    echo json_encode(['success' => false, 'error' => 'Target value must be greater than 0']);
+    exit;
+}
+if (!in_array($priority, ['low', 'medium', 'high'])) {
+    $priority = 'medium';
+}
+$due_date = !empty($due_date) ? $due_date : null;
+
 try {
-    // Lock row + verify ownership + read flags/status
-    $q = $pdo->prepare("
-        SELECT current_value, status, is_admin_created, is_self_created
+    // Only allow editing self-created goals belonging to this student
+    $check = $pdo->prepare("
+        SELECT id, is_self_created, current_value
         FROM student_goals
-        WHERE id=? AND student_id=? AND deleted_at IS NULL
-        FOR UPDATE
+        WHERE id = ? AND student_id = ? AND deleted_at IS NULL
     ");
-    $q->execute([$goal_id, $student_id]);
-    $goal = $q->fetch(PDO::FETCH_ASSOC);
+    $check->execute([$goal_id, $student_id]);
+    $goal = $check->fetch(PDO::FETCH_ASSOC);
 
-    if (!$goal) throw new Exception("Not found");
-
-    // Rule 1: admin-created goals cannot be edited
-    if ((int)($goal['is_admin_created'] ?? 0) === 1) {
-        throw new Exception("You cannot edit admin-created goals.");
+    if (!$goal) {
+        echo json_encode(['success' => false, 'error' => 'Goal not found']);
+        exit;
     }
 
-    // Rule 2: must be self-created
-    if ((int)($goal['is_self_created'] ?? 0) !== 1) {
-        throw new Exception("You can only edit your own created goals.");
+    if (!$goal['is_self_created']) {
+        echo json_encode(['success' => false, 'error' => 'You can only edit your own self-created goals']);
+        exit;
     }
 
-    // Rule 3: only completed goals can be edited
-    if (($goal['status'] ?? '') !== 'completed') {
-        throw new Exception("You can only edit a goal after it is completed.");
-    }
+    // Recalculate percentage based on new target
+    $current_value = (float) $goal['current_value'];
+    $percentage    = $target_value > 0
+        ? min(100, round(($current_value / $target_value) * 100, 2))
+        : 0;
 
-    $current_value = (float)($goal['current_value'] ?? 0);
+    $new_status = 'pending';
+    if ($percentage >= 100)      $new_status = 'completed';
+    elseif ($current_value > 0)  $new_status = 'in_progress';
 
-    // Recalculate percentage based on new target (keep completed status)
-    $percentage = ($target_value > 0) ? (($current_value / $target_value) * 100) : 0;
-    if ($percentage > 100) $percentage = 100;
-    if ($percentage < 0) $percentage = 0;
-
-    // Keep status as completed (because you only allow editing when completed)
-    $status = 'completed';
-
-    $pdo->prepare("
+    $stmt = $pdo->prepare("
         UPDATE student_goals
-        SET title=?, description=?, category=?, priority=?,
-            target_value=?, unit=?, due_date=?,
-            progress_percentage=?, status=?, updated_at=NOW()
-        WHERE id=? AND student_id=? AND deleted_at IS NULL
-    ")->execute([
+        SET title               = ?,
+            description         = ?,
+            category            = ?,
+            priority            = ?,
+            unit                = ?,
+            target_value        = ?,
+            due_date            = ?,
+            progress_percentage = ?,
+            status              = ?,
+            updated_at          = NOW()
+        WHERE id = ? AND student_id = ?
+    ");
+    $stmt->execute([
         $title,
         $description,
         $category,
         $priority,
-        $target_value,
         $unit,
+        $target_value,
         $due_date,
         $percentage,
-        $status,
+        $new_status,
         $goal_id,
         $student_id
     ]);
 
-    $pdo->commit();
-    jsonResponse(['success' => true, 'message' => 'Goal updated']);
-} catch (Throwable $e) {
-    if ($pdo->inTransaction()) $pdo->rollBack();
-    jsonResponse(['success' => false, 'error' => $e->getMessage()], 400);
+    echo json_encode(['success' => true, 'message' => 'Goal updated successfully']);
+
+} catch (Exception $e) {
+    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 }

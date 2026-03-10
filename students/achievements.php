@@ -522,6 +522,44 @@ button{ font-family: inherit; cursor:pointer; border:none; background:none; }
 .tab-content{ display:none; width:100%; margin-top: 12px; }
 .tab-content.active{ display:block; }
 
+/* Inline count inside tab label */
+.tab-count{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 950;
+  background:
+    radial-gradient(120% 180% at 20% 20%, rgba(255,255,255,.20), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.70), rgba(34,211,238,.35));
+  border: 1px solid rgba(255,255,255,.18);
+  color: #fff;
+  margin-left: 4px;
+}
+
+/* Inline count inside tab label */
+.tab-count{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 950;
+  background:
+    radial-gradient(120% 180% at 20% 20%, rgba(255,255,255,.20), transparent 55%),
+    linear-gradient(135deg, rgba(79,70,229,.70), rgba(34,211,238,.35));
+  border: 1px solid rgba(255,255,255,.18);
+  color: #fff;
+  margin-left: 4px;
+}
+
 /* ===== Cards ===== */
 .card{
   width: 100%;
@@ -902,12 +940,12 @@ button{ font-family: inherit; cursor:pointer; border:none; background:none; }
             <!-- Tabs -->
             <div class="tabs">
                 <button class="tab active" data-tab="earned">
-                    <i class="fas fa-unlock"></i> Earned Achievements
-                    <span class="tab-badge"><?php echo count($earned_achievements); ?></span>
+                    <i class="fas fa-unlock"></i>
+                    Earned Achievements = <span class="tab-count"><?php echo count($earned_achievements); ?></span>
                 </button>
                 <button class="tab" data-tab="progress">
-                    <i class="fas fa-bullseye"></i> In Progress
-                    <span class="tab-badge"><?php echo count($progress_achievements); ?></span>
+                    <i class="fas fa-bullseye"></i>
+                    In Progress = <span class="tab-count"><?php echo count($progress_achievements); ?></span>
                 </button>
                 <button class="tab" data-tab="activity">
                     <i class="fas fa-history"></i> Recent Activity
@@ -1020,17 +1058,17 @@ button{ font-family: inherit; cursor:pointer; border:none; background:none; }
 
             <!-- Tab 3: Recent Activity -->
             <div class="tab-content" id="tab-activity">
-                <div class="content-grid">
                     <!-- Recent Achievement Unlocks -->
                     <div class="card">
                         <div class="card-header">
                             <h3><i class="fas fa-history"></i> Recent Achievement Activity</h3>
+                            <span style="color:var(--muted); font-size:13px;"><?php echo count($recent_activity); ?> recent events</span>
                         </div>
                         <div class="card-body">
                             <?php if (empty($recent_activity)): ?>
                                 <div class="empty-state">
                                     <i class="fas fa-bell-slash"></i>
-                                    <p>No recent achievement activity</p>
+                                    <p>No recent achievement activity yet. Complete goals to unlock achievements!</p>
                                 </div>
                             <?php else: ?>
                                 <div class="activity-list">
@@ -1050,76 +1088,6 @@ button{ font-family: inherit; cursor:pointer; border:none; background:none; }
                             <?php endif; ?>
                         </div>
                     </div>
-
-                    <!-- Top Students Leaderboard -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-medal"></i> Top Achievers</h3>
-                        </div>
-                        <div class="card-body">
-                            <?php
-                            // Fetch top students in the system
-                            $top_students = $pdo->query("
-                                SELECT 
-                                    u.id, u.name, u.profile_picture,
-                                    COUNT(ua.id) as achievements_count,
-                                    COALESCE(SUM(a.points), 0) as total_points
-                                FROM users u
-                                LEFT JOIN user_achievements ua ON u.id = ua.user_id AND ua.deleted_at IS NULL
-                                LEFT JOIN achievements a ON ua.achievement_id = a.id AND a.deleted_at IS NULL
-                                WHERE u.role = 'student'
-  AND u.status = 'active'
-  AND u.deleted_at IS NULL
-
-                                GROUP BY u.id
-                                ORDER BY achievements_count DESC, total_points DESC
-                                LIMIT 5
-                            ")->fetchAll(PDO::FETCH_ASSOC);
-                            ?>
-
-                            <?php if (empty($top_students)): ?>
-                                <div class="empty-state">
-                                    <i class="fas fa-users"></i>
-                                    <p>No leaderboard data yet</p>
-                                </div>
-                            <?php else: ?>
-                                <div class="leaderboard-list">
-                                    <?php foreach ($top_students as $index => $student):
-                                        $rank_class = '';
-                                        if ($index === 0) $rank_class = 'gold';
-                                        elseif ($index === 1) $rank_class = 'silver';
-                                        elseif ($index === 2) $rank_class = 'bronze';
-                                    ?>
-                                        <div class="leaderboard-item <?php echo $student['id'] == $student_id ? 'highlight' : ''; ?>">
-                                            <div class="leaderboard-rank <?php echo $rank_class; ?>">
-                                                <?php echo $index + 1; ?>
-                                            </div>
-                                            <?php if (!empty($student['profile_picture'])): ?>
-                                                <img src="../<?php echo htmlspecialchars($student['profile_picture']); ?>" alt="Profile" class="leaderboard-avatar">
-                                            <?php else: ?>
-                                                <div class="leaderboard-avatar default">
-                                                    <?php echo strtoupper(substr($student['name'], 0, 1)); ?>
-                                                </div>
-                                            <?php endif; ?>
-                                            <div class="leaderboard-info">
-                                                <div class="leaderboard-name">
-                                                    <?php echo htmlspecialchars($student['name']); ?>
-                                                    <?php if ($student['id'] == $student_id): ?>
-                                                        <span style="font-size: 0.75rem; color: var(--primary);">(You)</span>
-                                                    <?php endif; ?>
-                                                </div>
-                                                <div class="leaderboard-stats">
-                                                    <span><?php echo $student['achievements_count']; ?> achievements</span>
-                                                    <span><?php echo $student['total_points']; ?> points</span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <!-- Tips Section -->
@@ -1152,8 +1120,6 @@ button{ font-family: inherit; cursor:pointer; border:none; background:none; }
                             <i class="fas fa-star" style="color: var(--purple);"></i> Earn Points
                         </div>
                         <div style="font-size: 13px; color: #6b7280;">Accumulate points through achievements</div>
-                    </div>
-                </div>
             </div>
         </main>
     </div>

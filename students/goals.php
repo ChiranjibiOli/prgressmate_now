@@ -1067,12 +1067,15 @@ select:focus-visible{
                         // remaining never negative
                        $remaining = round(max(0, $target_value - $current_value), 2);
                         $isPending = (($goal['status'] ?? '') === 'pending');
-                        $isAdminGoal = ((int)$goal['is_admin_created'] === 1);
                         $isSelfCreated = ((int)($goal['is_self_created'] ?? 0) === 1);
                         $status = $goal['status'] ?? 'pending';
 
-                        // Only allow CRUD if student-created AND completed AND not admin goal
-                     $canCrud = (!$isAdminGoal && $isSelfCreated && $status !== 'completed');
+                        // Edit: only self-created goals not yet completed
+                        $canEdit = ($isSelfCreated && $status !== 'completed');
+                        // Delete: always allowed on any goal
+                        $canDelete = true;
+                        // Legacy alias
+                        $canCrud = $canEdit;
 
 
 
@@ -1104,18 +1107,18 @@ select:focus-visible{
                                             <i class="fas fa-ellipsis-v"></i>
                                         </button>
                                         <div class="dropdown-menu">
-                                            <?php if ($canCrud): ?>
+                                            <?php if ($canEdit): ?>
                                                 <a href="#" onclick="openEditGoalModal(<?php echo $goal['id']; ?>)" class="dropdown-item">
                                                     <i class="fas fa-edit"></i> Edit
                                                 </a>
-                                                <a href="#" onclick="openDeleteModal(<?php echo $goal['id']; ?>, '<?php echo addslashes($goal['title']); ?>')" class="dropdown-item text-danger">
-                                                    <i class="fas fa-trash"></i> Delete
-                                                </a>
                                             <?php else: ?>
                                                 <span class="dropdown-item" style="color:#64748b; cursor:not-allowed;">
-                                                    <i class="fas fa-lock"></i> Locked
+                                                    <i class="fas fa-lock"></i> Edit (Locked)
                                                 </span>
                                             <?php endif; ?>
+                                            <a href="#" onclick="openDeleteModal(<?php echo $goal['id']; ?>, '<?php echo addslashes($goal['title']); ?>')" class="dropdown-item text-danger">
+                                                <i class="fas fa-trash"></i> Delete
+                                            </a>
                                         </div>
 
 
@@ -1174,15 +1177,14 @@ select:focus-visible{
                                     </button>
                                 <?php endif; ?>
 
-                                <?php if ($canCrud): ?>
+                                <?php if ($canEdit): ?>
                                     <button class="btn btn-sm btn-secondary" onclick="openEditGoalModal(<?php echo $goal['id']; ?>)">
                                         <i class="fas fa-edit"></i> Edit
                                     </button>
-                                <?php else: ?>
-                                    <button class="btn btn-sm btn-secondary" disabled style="opacity:.6; cursor:not-allowed;">
-                                        <i class="fas fa-lock"></i> Locked
-                                    </button>
                                 <?php endif; ?>
+                                <button class="btn btn-sm btn-danger" onclick="openDeleteModal(<?php echo $goal['id']; ?>, '<?php echo addslashes($goal['title']); ?>')">
+                                    <i class="fas fa-trash"></i> Delete
+                                </button>
 
 
                             </div>
