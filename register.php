@@ -1,14 +1,10 @@
 <?php
-// FIX 1: session_start() MUST be at the very top before any output
-// Original file was missing this — auto-login after registration silently failed
+
+
 session_start();
 require_once 'includes/db_connection.php';
 
-// If already logged in, redirect away
-if (isset($_SESSION['user_id'])) {
-    header("Location: " . ($_SESSION['role'] === 'admin' ? 'admin/admin.php' : 'students/dashboard.php'));
-    exit;
-}
+
 
 $error   = '';
 $success = '';
