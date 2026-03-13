@@ -1,1023 +1,430 @@
 <?php
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
-
+if (session_status() === PHP_SESSION_NONE) session_start();
 require_once '../includes/db_connection.php';
 require_once '../includes/functions.php';
+require_once '../includes/student_nav.php';
 checkAuth('student');
 
 $student_id = $_SESSION['user_id'];
 
 // Update login streak
 updateLoginStreak($pdo, $student_id);
+awardAchievements($pdo, $student_id);
 
-// ====== Stats (all from DB) ======
-$total_goals      = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND deleted_at IS NULL", [$student_id]);
-$completed_goals  = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='completed' AND deleted_at IS NULL", [$student_id]);
-$in_progress_goals= getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='in_progress' AND deleted_at IS NULL", [$student_id]);
-$total_points     = getStat($pdo, "SELECT COALESCE(points,0) FROM users WHERE id=?", [$student_id]);
-$streak           = getStat($pdo, "SELECT COALESCE(current_streak,0) FROM users WHERE id=?", [$student_id]);
-$unread           = getStat($pdo, "SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0 AND deleted_at IS NULL", [$student_id]);
-$earned_achievements = getStat($pdo, "SELECT COUNT(*) FROM user_achievements WHERE user_id=? AND earned_at IS NOT NULL", [$student_id]);
+// ── Core stats ────────────────────────────────────────────────
+$total_goals     = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND deleted_at IS NULL", [$student_id]);
+$completed_goals = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='completed' AND deleted_at IS NULL", [$student_id]);
+$in_progress     = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='in_progress' AND deleted_at IS NULL", [$student_id]);
+$pending_goals   = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='pending' AND deleted_at IS NULL", [$student_id]);
+$overdue_goals   = getStat($pdo, "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND status='overdue' AND deleted_at IS NULL", [$student_id]);
+$total_points    = getStat($pdo, "SELECT COALESCE(points,0) FROM users WHERE id=?", [$student_id]);
+$streak          = getStat($pdo, "SELECT COALESCE(current_streak,0) FROM users WHERE id=?", [$student_id]);
+$unread          = getStat($pdo, "SELECT COUNT(*) FROM notifications WHERE user_id=? AND is_read=0 AND deleted_at IS NULL", [$student_id]);
+$total_badges    = getStat($pdo, "SELECT COUNT(*) FROM user_achievements WHERE user_id=? AND earned_at IS NOT NULL AND deleted_at IS NULL", [$student_id]);
 
-// ====== Recent Goals (last 5) ======
-$recent_stmt = $pdo->prepare("
-    SELECT * FROM student_goals
-    WHERE student_id=? AND deleted_at IS NULL
-    ORDER BY updated_at DESC
-    LIMIT 5
-");
-$recent_stmt->execute([$student_id]);
-$recent_goals = $recent_stmt->fetchAll();
+// ── Recent goals ──────────────────────────────────────────────
+$stmt = $pdo->prepare("SELECT * FROM student_goals WHERE student_id=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 5");
+$stmt->execute([$student_id]);
+$recent_goals = $stmt->fetchAll();
 
-// ====== Upcoming Deadlines (next 14 days, not completed) ======
-$upcoming_stmt = $pdo->prepare("
-    SELECT *, DATEDIFF(due_date, CURDATE()) AS days_left
-    FROM student_goals
-    WHERE student_id=?
-      AND deleted_at IS NULL
-      AND status NOT IN ('completed')
-      AND due_date IS NOT NULL
-      AND due_date >= CURDATE()
-    ORDER BY due_date ASC
-    LIMIT 5
-");
-$upcoming_stmt->execute([$student_id]);
-$upcoming_deadlines = $upcoming_stmt->fetchAll();
+// ── Upcoming deadlines ────────────────────────────────────────
+$stmt = $pdo->prepare("SELECT * FROM student_goals WHERE student_id=? AND due_date >= CURDATE() AND status != 'completed' AND deleted_at IS NULL ORDER BY due_date ASC LIMIT 4");
+$stmt->execute([$student_id]);
+$upcoming = $stmt->fetchAll();
 
-// ====== Recent Achievements (last 4 earned) ======
-$achievements_stmt = $pdo->prepare("
+// ── Recent earned achievements ────────────────────────────────
+$stmt = $pdo->prepare("
     SELECT a.title, a.icon, a.color, a.points, ua.earned_at
     FROM user_achievements ua
     JOIN achievements a ON a.id = ua.achievement_id
-    WHERE ua.user_id=? AND ua.earned_at IS NOT NULL
-    ORDER BY ua.earned_at DESC
-    LIMIT 4
+    WHERE ua.user_id=? AND ua.earned_at IS NOT NULL AND ua.deleted_at IS NULL AND a.deleted_at IS NULL
+    ORDER BY ua.earned_at DESC LIMIT 4
 ");
-$achievements_stmt->execute([$student_id]);
-$recent_achievements = $achievements_stmt->fetchAll();
+$stmt->execute([$student_id]);
+$recent_badges = $stmt->fetchAll();
 
-// ====== Recent Notifications (last 5) ======
-$notif_stmt = $pdo->prepare("
-    SELECT * FROM notifications
-    WHERE user_id=? AND deleted_at IS NULL
-    ORDER BY created_at DESC
-    LIMIT 5
-");
-$notif_stmt->execute([$student_id]);
-$notifications = $notif_stmt->fetchAll();
+// ── Recent notifications ──────────────────────────────────────
+$stmt = $pdo->prepare("SELECT * FROM notifications WHERE user_id=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 4");
+$stmt->execute([$student_id]);
+$notifications = $stmt->fetchAll();
 
-// ====== Weekly Progress Chart (last 7 days) ======
-$progress_stmt = $pdo->prepare("
-    SELECT log_date, SUM(progress_added) AS total
-    FROM progress_history
-    WHERE student_id=?
-      AND log_date >= CURDATE() - INTERVAL 7 DAY
-    GROUP BY log_date
-    ORDER BY log_date ASC
-");
-$progress_stmt->execute([$student_id]);
-$progress_data = $progress_stmt->fetchAll(PDO::FETCH_ASSOC);
+// ── Weekly goal completions (bar chart) — last 7 days ─────────
+$weekly = [];
+for ($i = 6; $i >= 0; $i--) {
+    $date  = date('Y-m-d', strtotime("-$i days"));
+    $label = date('D', strtotime($date));
+    $count = getStat($pdo,
+        "SELECT COUNT(*) FROM student_goals WHERE student_id=? AND DATE(completed_at)=? AND status='completed' AND deleted_at IS NULL",
+        [$student_id, $date]
+    );
+    $weekly[] = ['label' => $label, 'count' => $count];
+}
+$bar_labels = json_encode(array_column($weekly, 'label'));
+$bar_data   = json_encode(array_column($weekly, 'count'));
 
-$current = basename($_SERVER['PHP_SELF']);
+// ── Donut data ────────────────────────────────────────────────
+$donut_data   = json_encode([$completed_goals, $in_progress, $pending_goals, $overdue_goals]);
+$donut_labels = json_encode(['Completed', 'In Progress', 'Pending', 'Overdue']);
 ?>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        <?php
-        // Prepare clean, readable dates and data
-        $chart_labels = [];
-        $chart_data = [];
-
-        if (!empty($progress_data)) {
-            foreach ($progress_data as $row) {
-                $chart_labels[] = date('M j', strtotime($row['log_date'])); // e.g., "Dec 26"
-                $chart_data[] = (float)$row['total'];
-            }
-        } else {
-            $chart_labels = ['No data yet'];
-            $chart_data = [0];
-        }
-        ?>
-
-        const ctx = document.getElementById('progressChart').getContext('2d');
-
-        new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: <?php echo json_encode($chart_labels); ?>,
-                datasets: [{
-                    label: 'Daily Progress',
-                    data: <?php echo json_encode($chart_data); ?>,
-                    borderColor: '#4f46e5',
-                    backgroundColor: 'rgba(79, 70, 229, 0.15)',
-                    fill: true,
-                    tension: 0.4,
-                    pointBackgroundColor: '#4f46e5',
-                    pointBorderColor: '#ffffff',
-                    pointBorderWidth: 3,
-                    pointRadius: 6,
-                    pointHoverRadius: 9
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false, // Crucial for fixed height
-                plugins: {
-                    legend: {
-                        display: false
-                    },
-                    tooltip: {
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                        cornerRadius: 8,
-                        titleFont: {
-                            size: 14
-                        },
-                        bodyFont: {
-                            size: 13
-                        }
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        grid: {
-                            color: 'rgba(0, 0, 0, 0.05)'
-                        },
-                        ticks: {
-                            padding: 10
-                        }
-                    },
-                    x: {
-                        grid: {
-                            display: false
-                        },
-                        ticks: {
-                            padding: 10
-                        }
-                    }
-                },
-                animation: {
-                    duration: 1800,
-                    easing: 'easeOutQuart'
-                }
-            }
-        });
-    });
-</script>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student Dashboard - ProgressMate</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard - ProgressMate</title>
+<?php nav_head(); ?>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+/* ── Dashboard-specific styles — layout/sidebar/theme from nav_body() ── */
 
-        :root{
-            --bg0:#070A18;
-            --bg1:#0B1030;
-            --text:#EAF0FF;
-            --muted: rgba(234,240,255,.65);
-            --muted2: rgba(234,240,255,.50);
-            --primary:#4F46E5;
-            --primary-light: rgba(79,70,229,.14);
-            --cyan:#22D3EE;
-            --pink:#60A5FA;
-            --success:#34D399;
-            --warning:#FBBF24;
-            --danger:#FB7185;
-            --border: rgba(255,255,255,.10);
-            --border2: rgba(255,255,255,.08);
-            --shadow: 0 18px 45px rgba(0,0,0,.35);
-            --shadow2: 0 10px 30px rgba(0,0,0,.22);
-            --r12: 12px;
-            --r14: 14px;
-            --r16: 16px;
-            --r20: 20px;
-        }
-
-        *{ box-sizing:border-box; }
-        html,body{ height:100%; }
-
-        body{
-            margin:0;
-            color: var(--text);
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
-            background:
-                radial-gradient(900px 520px at 18% 10%, rgba(79,70,229,.22), transparent 60%),
-                radial-gradient(900px 520px at 88% 15%, rgba(34,211,238,.18), transparent 58%),
-                radial-gradient(900px 520px at 70% 95%, rgba(96,165,250,.14), transparent 62%),
-                linear-gradient(180deg, var(--bg0), var(--bg1));
-            overflow-x:hidden;
-        }
-
-        a{ color: inherit; text-decoration:none; }
-        img{ max-width:100%; display:block; }
-
-        /* ===== MOBILE TOGGLE ===== */
-        .mobile-toggle{
-            position: fixed;
-            top: 16px;
-            left: 16px;
-            z-index: 2000;
-            width: 44px;
-            height: 44px;
-            display: none;
-            place-items: center;
-            border-radius: 14px;
-            border: 1px solid var(--border);
-            background: rgba(10,14,35,.60);
-            color: var(--text);
-            box-shadow: var(--shadow2);
-            backdrop-filter: blur(12px);
-            cursor:pointer;
-        }
-        .mobile-toggle i{ font-size: 18px; }
-
-        /* ===== LAYOUT ===== */
-        .dashboard-wrapper{
-            display: grid;
-            grid-template-columns: 320px 1fr;
-            min-height: 100vh;
-        }
-
-        /* ===== SIDEBAR (identical aesthetic) ===== */
-        .sidebar{
-            position: sticky;
-            top: 0;
-            height: 100vh;
-            overflow: hidden;
-            display:flex;
-            flex-direction: column;
-            padding: 18px 16px 16px;
-            background:
-                radial-gradient(700px 320px at 20% 0%, rgba(79,70,229,.18), transparent 60%),
-                radial-gradient(520px 300px at 100% 20%, rgba(34,211,238,.14), transparent 60%),
-                linear-gradient(180deg, rgba(10,14,35,.85), rgba(10,14,35,.62));
-            border-right: 1px solid rgba(255,255,255,.10);
-            backdrop-filter: blur(16px);
-            box-shadow: 0 10px 50px rgba(0,0,0,.25);
-        }
-        .sidebar::before{
-            content:"";
-            position:absolute;
-            inset:-2px;
-            background: linear-gradient(120deg, rgba(79,70,229,.20), rgba(34,211,238,.14), rgba(96,165,250,.10));
-            opacity:.22;
-            filter: blur(26px);
-            pointer-events:none;
-            z-index:0;
-        }
-        .sidebar *{ position:relative; z-index:2; }
-
-        .sidebar-header{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            padding: 10px 10px 12px;
-        }
-
-        .logo{
-            display:flex;
-            align-items:center;
-            gap:10px;
-            font-weight: 900;
-            letter-spacing: .2px;
-            font-size: 18px;
-        }
-        .logo i{
-            width: 34px;
-            height: 34px;
-            display:grid;
-            place-items:center;
-            border-radius: 12px;
-            background:
-                radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
-                linear-gradient(135deg, rgba(79,70,229,.70), rgba(34,211,238,.35));
-            border: 1px solid rgba(255,255,255,.18);
-            box-shadow: 0 14px 30px rgba(79,70,229,.18);
-        }
-
-        .sidebar-close{
-            display:none;
-            width: 40px;
-            height: 40px;
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,.14);
-            background: rgba(255,255,255,.06);
-            color: var(--text);
-            cursor:pointer;
-        }
-
-        .user-profile{
-            display:flex;
-            gap: 12px;
-            padding: 12px 12px;
-            border-radius: var(--r16);
-            border: 1px solid var(--border2);
-            background:
-                radial-gradient(140% 180% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
-                linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
-            box-shadow: 0 12px 26px rgba(0,0,0,.18);
-        }
-        .profile-pic{
-            width: 52px;
-            height: 52px;
-            border-radius: 16px;
-            object-fit: cover;
-            border: 1px solid rgba(255,255,255,.16);
-            box-shadow: 0 10px 20px rgba(0,0,0,.22);
-        }
-        .profile-pic.default{
-            display:grid;
-            place-items:center;
-            font-weight: 950;
-            font-size: 18px;
-            background:
-                radial-gradient(120% 140% at 30% 25%, rgba(255,255,255,.18), transparent 55%),
-                linear-gradient(135deg, rgba(34,211,238,.55), rgba(79,70,229,.55));
-        }
-        .user-info h4{ margin: 2px 0 2px; font-size: 15px; font-weight: 900; }
-        .user-info p{
-            margin: 0;
-            font-size: 12.5px;
-            color: var(--muted);
-            white-space: nowrap;
-        }
-
-        .nav-menu{
-            flex: 1 1 auto;
-            overflow-y: auto;
-            padding: 12px 6px 8px;
-            margin-top: 8px;
-            display:flex;
-            flex-direction: column;
-            gap: 6px;
-        }
-        .nav-menu::-webkit-scrollbar{ width: 8px; }
-        .nav-menu::-webkit-scrollbar-thumb{
-            background: rgba(255,255,255,.16);
-            border-radius: 99px;
-        }
-        .nav-link{
-            display:flex;
-            align-items:center;
-            gap: 12px;
-            padding: 12px 12px;
-            border-radius: 14px;
-            color: rgba(234,240,255,.92);
-            border: 1px solid transparent;
-            transition: transform .18s ease, background .18s ease;
-            font-size: 14.5px;
-        }
-        .nav-link i{
-            width: 34px;
-            height: 34px;
-            display:grid;
-            place-items:center;
-            border-radius: 12px;
-            background: rgba(255,255,255,.05);
-            border: 1px solid rgba(255,255,255,.10);
-        }
-        .nav-link:hover{
-            background: rgba(255,255,255,.06);
-            border-color: rgba(255,255,255,.12);
-            transform: translateX(2px);
-        }
-        .nav-link.active{
-            background:
-                radial-gradient(120% 160% at 10% 20%, rgba(255,255,255,.14), transparent 55%),
-                linear-gradient(135deg, rgba(79,70,229,.55), rgba(34,211,238,.20));
-            border-color: rgba(255,255,255,.18);
-            box-shadow: 0 18px 40px rgba(79,70,229,.18);
-        }
-        .badge{
-            margin-left:auto;
-            font-size: 12px;
-            font-weight: 900;
-            padding: 4px 10px;
-            border-radius: 999px;
-            color: var(--text);
-            background:
-                radial-gradient(120% 180% at 20% 20%, rgba(255,255,255,.20), transparent 55%),
-                linear-gradient(135deg, rgba(96,165,250,.70), rgba(79,70,229,.45));
-            border: 1px solid rgba(255,255,255,.18);
-        }
-
-        .sidebar-quick-stats{
-            margin-top: 10px;
-            padding: 10px;
-            border-radius: var(--r16);
-            border: 1px solid rgba(255,255,255,.10);
-            background: rgba(255,255,255,.03);
-        }
-        .sidebar-stat{
-            display:flex;
-            gap: 12px;
-            align-items:center;
-            padding: 8px 10px;
-            border-radius: 14px;
-        }
-        .sidebar-stat:hover{ background: rgba(255,255,255,.04); }
-        .sidebar-stat-icon{
-            width: 38px;
-            height: 38px;
-            border-radius: 14px;
-            display:grid;
-            place-items:center;
-            border: 1px solid rgba(255,255,255,.12);
-            background:
-                radial-gradient(120% 180% at 20% 10%, rgba(255,255,255,.18), transparent 55%),
-                linear-gradient(135deg, rgba(34,211,238,.35), rgba(79,70,229,.35));
-        }
-        .sidebar-stat-label{ font-size: 12px; color: var(--muted); }
-        .sidebar-stat-number{ font-size: 18px; font-weight: 950; }
-        .sidebar-footer{ margin-top: 12px; }
-        .logout-btn{
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            gap: 10px;
-            padding: 12px 12px;
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,.14);
-            background:
-                radial-gradient(140% 180% at 20% 0%, rgba(255,255,255,.10), transparent 60%),
-                linear-gradient(135deg, rgba(96,165,250,.16), rgba(255,255,255,.03));
-        }
-
-        /* ===== MAIN CONTENT ===== */
-        .main-content{
-            padding: 22px 22px 32px;
-        }
-        .main-content > *{
-            max-width: 1180px;
-        }
-
-        .page-header{
-            width: 100%;
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 14px;
-            padding: 16px 16px;
-            border-radius: var(--r20);
-            border: 1px solid var(--border);
-            background:
-                radial-gradient(120% 220% at 15% 10%, rgba(255,255,255,.10), transparent 55%),
-                linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
-            box-shadow: var(--shadow2);
-        }
-        .header-content h1{ margin:0 0 6px; font-size: 24px; font-weight: 950; }
-        .header-content p{ margin:0; color: var(--muted); font-size: 14px; }
-
-        .btn{
-            display:inline-flex;
-            align-items:center;
-            justify-content:center;
-            gap: 10px;
-            padding: 12px 14px;
-            border-radius: 14px;
-            font-weight: 900;
-            border: 1px solid rgba(255,255,255,.14);
-            color: var(--text);
-            background: rgba(255,255,255,.05);
-            cursor:pointer;
-            transition: transform .18s ease, box-shadow .18s ease;
-        }
-        .btn:hover{
-            transform: translateY(-1px);
-            background: rgba(255,255,255,.07);
-            box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 12px 30px rgba(79,70,229,.18);
-        }
-        .btn-primary{
-            border-color: rgba(79,70,229,.35);
-            background:
-                radial-gradient(120% 180% at 20% 10%, rgba(255,255,255,.16), transparent 55%),
-                linear-gradient(135deg, rgba(79,70,229,.62), rgba(34,211,238,.18));
-        }
-
-        .stats-grid{
-            width: 100%;
-            margin-top: 14px;
-            display:grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 12px;
-        }
-        .stat-card{
-            border-radius: var(--r20);
-            border: 1px solid rgba(255,255,255,.12);
-            background:
-                radial-gradient(120% 180% at 10% 0%, rgba(255,255,255,.12), transparent 60%),
-                linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
-            box-shadow: var(--shadow2);
-        }
-        .stat-content{
-            display:flex;
-            align-items:center;
-            gap: 12px;
-            padding: 14px 14px;
-        }
-        .stat-icon{
-            width: 44px;
-            height: 44px;
-            border-radius: 16px;
-            display:grid;
-            place-items:center;
-            border: 1px solid rgba(255,255,255,.16);
-            background:
-                radial-gradient(120% 180% at 20% 15%, rgba(255,255,255,.20), transparent 55%),
-                linear-gradient(135deg, rgba(34,211,238,.40), rgba(79,70,229,.40));
-        }
-        .stat-number{ font-size: 24px; font-weight: 950; line-height: 1.1; }
-        .stat-label{ margin-top: 2px; font-size: 13px; color: var(--muted); }
-
-        .content-grid{
-            width: 100%;
-            margin-top: 14px;
-            display:grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-        }
-
-        .card{
-            border-radius: var(--r20);
-            border: 1px solid rgba(255,255,255,.10);
-            background:
-                radial-gradient(140% 220% at 10% 0%, rgba(255,255,255,.10), transparent 60%),
-                linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
-            box-shadow: var(--shadow);
-            overflow:hidden;
-        }
-        .card-header{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 12px 14px;
-            border-bottom: 1px solid rgba(255,255,255,.08);
-            background: rgba(255,255,255,.03);
-        }
-        .card-header h3{
-            margin: 0;
-            font-size: 15px;
-            font-weight: 950;
-            display:flex;
-            align-items:center;
-            gap: 10px;
-        }
-        .card-header h3 i{
-            width: 34px;
-            height: 34px;
-            border-radius: 14px;
-            display:grid;
-            place-items:center;
-            border: 1px solid rgba(255,255,255,.12);
-            background: rgba(255,255,255,.05);
-        }
-        .card-body{ padding: 12px 14px 14px; }
-
-        .goal-item, .notification-item{
-            border-radius: 16px;
-            border: 1px solid rgba(255,255,255,.08);
-            background: rgba(255,255,255,.03);
-            padding: 12px 12px;
-            margin-bottom: 10px;
-        }
-        .goal-header{
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            margin-bottom:8px;
-        }
-        .goal-title{ font-weight:700; }
-        .goal-date{ font-size:12px; color:var(--muted2); }
-        .goal-status{
-            font-size:12px;
-            padding:4px 10px;
-            border-radius:20px;
-            background:rgba(255,255,255,.06);
-            border:1px solid rgba(255,255,255,.08);
-        }
-        .progress-bar{
-            height: 10px;
-            width: 100%;
-            border-radius: 999px;
-            background: rgba(255,255,255,.07);
-            border: 1px solid rgba(255,255,255,.08);
-            overflow:hidden;
-            margin: 8px 0 4px;
-        }
-        .progress-fill{
-            height: 100%;
-            width: 0%;
-            border-radius: 999px;
-            background: linear-gradient(90deg, rgba(34,211,238,.95), rgba(79,70,229,.95));
-            transition: width 1s cubic-bezier(.22,.75,.12,1);
-        }
-
-        .empty-state{
-            text-align:center;
-            padding: 22px 14px;
-            color: var(--muted);
-        }
-        .empty-state i{
-            display:inline-grid;
-            place-items:center;
-            width: 52px;
-            height: 52px;
-            border-radius: 18px;
-            margin-bottom: 10px;
-            border: 1px solid rgba(255,255,255,.12);
-            background: rgba(255,255,255,.05);
-        }
-
-        .achievements-grid{
-            display:grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 10px;
-        }
-        .achievement-item{
-            border-radius: 18px;
-            border: 1px solid rgba(255,255,255,.10);
-            background: rgba(255,255,255,.03);
-            padding: 12px;
-            text-align:center;
-        }
-        .achievement-icon{
-            width: 46px;
-            height: 46px;
-            border-radius: 16px;
-            display:grid;
-            place-items:center;
-            margin: 0 auto 8px;
-            border: 1px solid rgba(255,255,255,.18);
-        }
-        .achievement-title{ font-weight: 950; font-size: 13px; }
-        .achievement-points{ margin-top: 4px; font-size: 12px; color: var(--muted); }
-
-        .quick-actions{
-            display:grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-            margin-top: 20px;
-        }
-        .quick-action{
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            gap: 10px;
-            padding: 14px 14px;
-            border-radius: 16px;
-            font-weight: 950;
-            border: 1px solid rgba(255,255,255,.12);
-            background:
-                radial-gradient(140% 220% at 10% 0%, rgba(255,255,255,.12), transparent 60%),
-                linear-gradient(135deg, rgba(79,70,229,.22), rgba(34,211,238,.10));
-            transition: transform .18s;
-        }
-        .quick-action:hover{ transform: translateY(-2px); }
-
-        .notifications-list .notification-item{
-            display:flex;
-            gap:12px;
-            align-items:flex-start;
-        }
-        .notification-icon i{
-            width:34px; height:34px; display:grid; place-items:center;
-            background:rgba(255,255,255,.05); border-radius:12px;
-        }
-        .notification-content{ flex:1; }
-        .notification-time{ font-size:11px; color:var(--muted2); margin-top:4px; }
-
-        canvas{ max-height:200px; width:100%; }
-
-        /* responsive */
-        @media (max-width: 1000px){
-            .stats-grid{ grid-template-columns: repeat(2,1fr); }
-            .content-grid{ grid-template-columns:1fr; }
-            .achievements-grid{ grid-template-columns:repeat(2,1fr); }
-            .quick-actions{ grid-template-columns:repeat(2,1fr); }
-        }
-        @media (max-width: 860px){
-            .dashboard-wrapper{ grid-template-columns: 1fr; }
-            .mobile-toggle{ display:grid; }
-            .sidebar{
-                position: fixed;
-                left: 0; top: 0;
-                width: 320px;
-                transform: translateX(-105%);
-                transition: transform .25s ease;
-                z-index: 1601;
-            }
-            .sidebar.active{ transform: translateX(0); }
-            .sidebar-close{ display:grid; }
-        }
-        @media (max-width: 520px){
-            .stats-grid, .achievements-grid, .quick-actions{ grid-template-columns:1fr; }
-        }
-        .mobile-toggle i{ font-size: 18px; }
-
-/* ✅ ADD OVERLAY CSS HERE */
-.sidebar-overlay{
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,.45);
-    backdrop-filter: blur(2px);
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity .2s ease;
-    z-index: 1600;
+.page-header{
+  width:100%;display:flex;align-items:flex-start;justify-content:space-between;
+  gap:14px;flex-wrap:wrap;padding:16px 18px;border-radius:var(--r20);
+  border:1px solid var(--border);margin-bottom:16px;
+  background:radial-gradient(120% 220% at 15% 10%,rgba(255,255,255,.10),transparent 55%),
+             linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.03));
+  box-shadow:var(--shadow2);
 }
-.sidebar-overlay.active{
-    opacity: 1;
-    pointer-events: auto;
-}
+.page-header h1{font-size:22px;font-weight:900;margin-bottom:3px;}
+.page-header p{font-size:13px;color:var(--muted);}
 
-    </style>
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;}
+.stat-card{
+  padding:14px;border-radius:var(--r20);
+  border:1px solid rgba(255,255,255,.10);
+  background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.03));
+  box-shadow:var(--shadow2);
+}
+.stat-icon{width:40px;height:40px;border-radius:14px;display:grid;place-items:center;margin-bottom:10px;border:1px solid rgba(255,255,255,.14);font-size:16px;}
+.stat-num{font-size:26px;font-weight:900;line-height:1.1;}
+.stat-lbl{font-size:12px;color:var(--muted);margin-top:2px;}
+
+.charts-row{display:grid;grid-template-columns:1fr 1.8fr;gap:12px;margin-bottom:16px;}
+.card{border-radius:var(--r20);border:1px solid rgba(255,255,255,.09);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));box-shadow:var(--shadow2);overflow:hidden;}
+.card-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.07);}
+.card-head h3{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:800;}
+.card-head h3 i{font-size:13px;color:var(--muted);}
+.card-head a{font-size:12.5px;color:var(--primary);}
+.card-body{padding:14px;}
+
+.donut-wrap{display:flex;align-items:center;gap:18px;}
+.donut-canvas{width:140px!important;height:140px!important;flex-shrink:0;}
+.donut-legend{display:flex;flex-direction:column;gap:8px;flex:1;}
+.legend-item{display:flex;align-items:center;gap:8px;font-size:12.5px;}
+.legend-dot{width:10px;height:10px;border-radius:999px;flex-shrink:0;}
+.legend-val{margin-left:auto;font-weight:800;font-size:13px;}
+.bar-canvas{width:100%!important;height:160px!important;}
+
+.bottom-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;}
+
+.goal-item{display:flex;flex-direction:column;gap:6px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.06);}
+.goal-item:last-child{border-bottom:none;padding-bottom:0;}
+.goal-row{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.goal-title{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;}
+.goal-due{font-size:11px;color:var(--muted);}
+.status-pill{font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:999px;white-space:nowrap;flex-shrink:0;}
+.s-completed{background:rgba(52,211,153,.15);color:#34D399;}
+.s-in_progress{background:rgba(79,70,229,.20);color:#818CF8;}
+.s-pending{background:rgba(251,191,36,.12);color:#FBBF24;}
+.s-overdue{background:rgba(251,113,133,.15);color:#FB7185;}
+.pbar{height:5px;border-radius:999px;background:rgba(255,255,255,.07);overflow:hidden;margin-top:2px;}
+.pfill{height:100%;border-radius:999px;background:linear-gradient(90deg,#4F46E5,#22D3EE);transition:width 1s ease;}
+.pfill.done{background:linear-gradient(90deg,#34D399,#10b981);}
+
+.due-item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.06);}
+.due-item:last-child{border-bottom:none;}
+.due-dot{width:8px;height:8px;border-radius:999px;flex-shrink:0;}
+.due-name{font-size:13px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.due-date{font-size:11.5px;color:var(--muted);white-space:nowrap;}
+.due-urgent{color:var(--danger)!important;}
+
+.badges-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
+.badge-item{display:flex;align-items:center;gap:9px;padding:9px;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);}
+.badge-icon{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;flex-shrink:0;font-size:13px;}
+.badge-name{font-size:12px;font-weight:700;line-height:1.2;}
+.badge-pts{font-size:11px;color:rgba(251,191,36,.90);font-weight:700;}
+
+.notif-item{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.06);}
+.notif-item:last-child{border-bottom:none;}
+.notif-icon{width:32px;height:32px;border-radius:11px;display:grid;place-items:center;flex-shrink:0;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);font-size:12px;}
+.notif-title{font-size:12.5px;font-weight:700;}
+.notif-msg{font-size:11.5px;color:var(--muted);margin-top:1px;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;}
+.notif-time{font-size:10.5px;color:var(--muted2);margin-top:3px;}
+.unread-dot{width:6px;height:6px;border-radius:999px;background:var(--primary);flex-shrink:0;margin-top:5px;}
+
+.section-label{font-size:16px;font-weight:900;margin-bottom:10px;}
+.actions-row{display:flex;gap:10px;flex-wrap:wrap;}
+.action-btn{display:flex;align-items:center;gap:9px;padding:11px 18px;border-radius:14px;border:1px solid rgba(255,255,255,.11);background:rgba(255,255,255,.05);font-size:13.5px;font-weight:700;transition:all .17s;}
+.action-btn:hover{background:rgba(79,70,229,.20);border-color:rgba(79,70,229,.35);transform:translateY(-1px);}
+.action-btn i{font-size:14px;color:var(--primary);}
+
+.empty{text-align:center;padding:20px 10px;color:var(--muted);font-size:13px;}
+.empty i{font-size:22px;display:block;margin-bottom:8px;opacity:.5;}
+
+/* Light theme — dashboard-specific overrides */
+[data-theme="light"] .page-header,
+[data-theme="light"] .stat-card,
+[data-theme="light"] .card{background:rgba(255,255,255,.65)!important;border-color:rgba(79,70,229,.12)!important;}
+[data-theme="light"] .card-head{border-bottom-color:rgba(79,70,229,.10)!important;}
+[data-theme="light"] .goal-item,
+[data-theme="light"] .due-item,
+[data-theme="light"] .notif-item{border-bottom-color:rgba(79,70,229,.08);}
+[data-theme="light"] .badge-item{background:rgba(79,70,229,.04);border-color:rgba(79,70,229,.10);}
+[data-theme="light"] .notif-icon{background:rgba(79,70,229,.07);border-color:rgba(79,70,229,.12);}
+[data-theme="light"] .action-btn{background:rgba(255,255,255,.80);border-color:rgba(79,70,229,.16);}
+[data-theme="light"] .action-btn:hover{background:rgba(79,70,229,.10);border-color:rgba(79,70,229,.30);}
+[data-theme="light"] .pbar{background:rgba(79,70,229,.10);}
+[data-theme="light"] .goal-title,
+[data-theme="light"] .stat-num,
+[data-theme="light"] .card-head h3,
+[data-theme="light"] .section-label{color:#1a1f3c;}
+
+@media(max-width:1000px){.stats-row{grid-template-columns:repeat(2,1fr);}.charts-row{grid-template-columns:1fr;}.donut-canvas{width:120px!important;height:120px!important;}}
+@media(max-width:640px){.stats-row{grid-template-columns:repeat(2,1fr);}.bottom-grid{grid-template-columns:1fr;}.charts-row{grid-template-columns:1fr;}}
+</style>
 </head>
 <body>
-    <!-- MOBILE TOGGLE -->
-    <button class="mobile-toggle" id="sidebarToggle"><i class="fas fa-bars"></i></button>
-    <div class="sidebar-overlay" id="sidebarOverlay"></div>
+<?php nav_body(); ?>
 
-    <div class="dashboard-wrapper">
-        <!-- SIDEBAR (student version) -->
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="logo"><i class="fas fa-star"></i> ProgressMate</div>
-                <button class="sidebar-close" id="sidebarClose"><i class="fas fa-times"></i></button>
+  <!-- Page header -->
+  <div class="page-header">
+    <div>
+      <h1>👋 Welcome back, <?= htmlspecialchars(explode(' ', $_SESSION['name'])[0]) ?>!</h1>
+      <p><?= date('l, F j, Y') ?> · <?= $streak ?> day streak · <?= $total_badges ?> badges earned</p>
+    </div>
+    <button class="theme-btn" id="themeBtn">
+      <div class="tgl-track" id="themeTrack"><div class="tgl-thumb"></div></div>
+      <span id="themeLabel">Dark</span>
+    </button>
+  </div>
+
+  <!-- Stat cards -->
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,rgba(79,70,229,.35),rgba(79,70,229,.15));color:#818CF8;"><i class="fas fa-bullseye"></i></div>
+      <div class="stat-num"><?= $total_goals ?></div>
+      <div class="stat-lbl">Total Goals</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,rgba(52,211,153,.35),rgba(52,211,153,.15));color:#34D399;"><i class="fas fa-check-circle"></i></div>
+      <div class="stat-num"><?= $completed_goals ?></div>
+      <div class="stat-lbl">Completed</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,rgba(251,191,36,.30),rgba(251,191,36,.12));color:#FBBF24;"><i class="fas fa-star"></i></div>
+      <div class="stat-num"><?= $total_points ?></div>
+      <div class="stat-lbl">Total Points</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-icon" style="background:linear-gradient(135deg,rgba(239,68,68,.30),rgba(239,68,68,.12));color:#FB7185;"><i class="fas fa-fire"></i></div>
+      <div class="stat-num"><?= $streak ?></div>
+      <div class="stat-lbl">Day Streak</div>
+    </div>
+  </div>
+
+  <!-- Charts row -->
+  <div class="charts-row">
+    <div class="card">
+      <div class="card-head"><h3><i class="fas fa-chart-pie"></i> Goal Status</h3></div>
+      <div class="card-body">
+        <?php if ($total_goals === 0): ?>
+          <div class="empty"><i class="fas fa-bullseye"></i>No goals yet — <a href="create_goal.php" style="color:var(--primary);">create one!</a></div>
+        <?php else: ?>
+        <div class="donut-wrap">
+          <canvas id="donutChart" class="donut-canvas"></canvas>
+          <div class="donut-legend">
+            <div class="legend-item"><span class="legend-dot" style="background:#34D399;"></span> Completed <span class="legend-val"><?= $completed_goals ?></span></div>
+            <div class="legend-item"><span class="legend-dot" style="background:#818CF8;"></span> In Progress <span class="legend-val"><?= $in_progress ?></span></div>
+            <div class="legend-item"><span class="legend-dot" style="background:#FBBF24;"></span> Pending <span class="legend-val"><?= $pending_goals ?></span></div>
+            <div class="legend-item"><span class="legend-dot" style="background:#FB7185;"></span> Overdue <span class="legend-val"><?= $overdue_goals ?></span></div>
+          </div>
+        </div>
+        <?php endif; ?>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3><i class="fas fa-chart-bar"></i> Goals Completed This Week</h3></div>
+      <div class="card-body"><canvas id="barChart" class="bar-canvas"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Bottom grid -->
+  <div class="bottom-grid">
+
+    <div class="card">
+      <div class="card-head"><h3><i class="fas fa-list-check"></i> Recent Goals</h3><a href="goals.php">View all</a></div>
+      <div class="card-body">
+        <?php if (empty($recent_goals)): ?>
+          <div class="empty"><i class="fas fa-bullseye"></i>No goals yet</div>
+        <?php else: ?>
+          <?php foreach ($recent_goals as $g):
+            $pct = (float)$g['progress_percentage'];
+            $s   = $g['status'];
+          ?>
+          <div class="goal-item">
+            <div class="goal-row">
+              <div class="goal-title"><?= htmlspecialchars($g['title']) ?></div>
+              <span class="status-pill s-<?= $s ?>"><?= ucfirst(str_replace('_',' ',$s)) ?></span>
             </div>
-
-            <div class="user-profile">
-                <?php if (!empty($_SESSION['profile_picture'])): ?>
-                    <img src="../<?php echo htmlspecialchars($_SESSION['profile_picture']); ?>" alt="Profile" class="profile-pic">
-                <?php else: ?>
-                    <div class="profile-pic default"><?php echo strtoupper(substr($_SESSION['name'], 0, 1)); ?></div>
-                <?php endif; ?>
-                <div class="user-info">
-                    <h4><?php echo htmlspecialchars($_SESSION['name']); ?></h4>
-                    <p><?php echo htmlspecialchars($_SESSION['email']); ?></p>
-                    <span style="font-size: 11px; background: #e0e7ff; color: #4f46e5; padding: 2px 8px; border-radius: 12px;">STUDENT</span>
-                </div>
-            </div>
-
-            <nav class="nav-menu">
-                <a href="dashboard.php" class="nav-link <?php echo ($current=='dashboard.php')?'active':''; ?>"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
-                <a href="goals.php" class="nav-link <?php echo ($current=='goals.php')?'active':''; ?>"><i class="fas fa-bullseye"></i> Goals</a>
-                <a href="achievements.php" class="nav-link <?php echo ($current=='achievements.php')?'active':''; ?>"><i class="fas fa-trophy"></i> Achievements</a>
-                <a href="notifications.php" class="nav-link <?php echo ($current=='notifications.php')?'active':''; ?>"><i class="fas fa-bell"></i> Notifications</a>
-                <a href="profile.php" class="nav-link <?php echo ($current=='profile.php')?'active':''; ?>"><i class="fas fa-user"></i> Profile</a>
-            </nav>
-
-            <div class="sidebar-quick-stats">
-                <div class="sidebar-stat">
-                    <div class="sidebar-stat-icon"><i class="fas fa-bullseye"></i></div>
-                    <div class="sidebar-stat-info">
-                        <div class="sidebar-stat-label">Goals</div>
-                        <div class="sidebar-stat-number"><?php echo $completed_goals; ?>/<?php echo $total_goals; ?></div>
-                    </div>
-                </div>
-                <div class="sidebar-stat">
-                    <div class="sidebar-stat-icon"><i class="fas fa-star"></i></div>
-                    <div class="sidebar-stat-info">
-                        <div class="sidebar-stat-label">Points</div>
-                        <div class="sidebar-stat-number"><?php echo $total_points; ?></div>
-                    </div>
-                </div>
-                <div class="sidebar-stat">
-                    <div class="sidebar-stat-icon"><i class="fas fa-fire"></i></div>
-                    <div class="sidebar-stat-info">
-                        <div class="sidebar-stat-label">Streak</div>
-                        <div class="sidebar-stat-number"><?php echo $streak; ?> days</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="sidebar-footer">
-                <a href="../logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a>
-            </div>
-        </aside>
-
-        <!-- MAIN CONTENT -->
-        <main class="main-content">
-            <!-- HEADER -->
-            <header class="page-header">
-                <div class="header-content">
-                    <h1>Welcome back, <?php echo htmlspecialchars($_SESSION['name']); ?>!</h1>
-                    <p><?php echo date('l, F j, Y'); ?> &nbsp;·&nbsp; <?php echo $streak; ?>-day streak &nbsp;·&nbsp; <?php echo $unread; ?> unread notification<?php echo $unread != 1 ? 's' : ''; ?></p>
-                </div>
-                <div class="header-actions">
-                    <a href="achievements.php" class="btn btn-primary"><i class="fas fa-trophy"></i> View Achievements</a>
-                </div>
-            </header>
-
-            <!-- STATS -->
-            <div class="stats-grid">
-                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-bullseye"></i></div><div><div class="stat-number"><?php echo $total_goals; ?></div><div class="stat-label">Total Goals</div></div></div></div>
-                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-check-circle"></i></div><div><div class="stat-number"><?php echo $completed_goals; ?></div><div class="stat-label">Completed</div></div></div></div>
-                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-spinner"></i></div><div><div class="stat-number"><?php echo $in_progress_goals; ?></div><div class="stat-label">In Progress</div></div></div></div>
-                <div class="stat-card"><div class="stat-content"><div class="stat-icon"><i class="fas fa-star"></i></div><div><div class="stat-number"><?php echo $total_points; ?></div><div class="stat-label">Total Points</div></div></div></div>
-            </div>
-
-            <!-- CONTENT GRID -->
-            <div class="content-grid">
-
-                <!-- RECENT GOALS CARD -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-bullseye"></i> Recent Goals</h3>
-                        <a href="goals.php" style="color:#22d3ee; font-size:13px;">View All</a>
-                    </div>
-                    <div class="card-body">
-                        <?php if (empty($recent_goals)): ?>
-                            <div class="empty-state"><i class="fas fa-bullseye"></i><p>No goals yet. <a href="create_goal.php" style="color:#22d3ee;">Create one!</a></p></div>
-                        <?php else: ?>
-                            <div class="goals-list">
-                                <?php foreach ($recent_goals as $g):
-                                    $pct = round($g['progress_percentage'], 1);
-                                ?>
-                                    <div class="goal-item">
-                                        <div class="goal-header">
-                                            <div>
-                                                <div class="goal-title"><?php echo htmlspecialchars($g['title']); ?></div>
-                                                <?php if ($g['due_date']): ?>
-                                                    <div class="goal-date">Due: <?php echo date('M j, Y', strtotime($g['due_date'])); ?></div>
-                                                <?php endif; ?>
-                                            </div>
-                                            <span class="goal-status status-<?php echo $g['status']; ?>"><?php echo ucfirst(str_replace('_',' ',$g['status'])); ?></span>
-                                        </div>
-                                        <div class="progress-bar"><div class="progress-fill" style="width:<?php echo $pct; ?>%"></div></div>
-                                        <div style="font-size:12px; color:var(--muted); text-align:right;"><?php echo $pct; ?>% Complete</div>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-
-                <!-- WEEKLY PROGRESS CHART -->
-                <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-chart-line"></i> Weekly Progress</h3></div>
-                    <div class="card-body"><canvas id="progressChart" style="height:200px; width:100%;"></canvas></div>
-                </div>
-
-                <!-- UPCOMING DEADLINES -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-calendar"></i> Upcoming Deadlines</h3>
-                        <a href="goals.php" style="color:#22d3ee; font-size:13px;">View All</a>
-                    </div>
-                    <div class="card-body">
-                        <?php if (empty($upcoming_deadlines)): ?>
-                            <div class="empty-state"><i class="fas fa-calendar-check"></i><p>No upcoming deadlines</p></div>
-                        <?php else: ?>
-                            <?php foreach ($upcoming_deadlines as $g):
-                                $days = (int)$g['days_left'];
-                                $urgency = $days <= 1 ? 'color:#fb7185;' : ($days <= 3 ? 'color:#fbbf24;' : '');
-                                $pct = round($g['progress_percentage'], 1);
-                            ?>
-                                <div class="goal-item">
-                                    <div class="goal-header">
-                                        <div>
-                                            <div class="goal-title"><?php echo htmlspecialchars($g['title']); ?></div>
-                                            <div class="goal-date" style="<?php echo $urgency; ?>">
-                                                <?php echo $days === 0 ? 'Due today!' : $days . ' day' . ($days != 1 ? 's' : '') . ' left'; ?>
-                                            </div>
-                                        </div>
-                                        <span class="goal-status status-<?php echo $g['status']; ?>"><?php echo ucfirst(str_replace('_',' ',$g['status'])); ?></span>
-                                    </div>
-                                    <div class="progress-bar"><div class="progress-fill" style="width:<?php echo $pct; ?>%"></div></div>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </div>
-                </div>
-
-                <!-- RECENT ACHIEVEMENTS -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-trophy"></i> Recent Achievements</h3>
-                        <a href="achievements.php" style="color:#22d3ee; font-size:13px;">View All</a>
-                    </div>
-                    <div class="card-body">
-                        <?php if (empty($recent_achievements)): ?>
-                            <div class="empty-state"><i class="fas fa-trophy"></i><p>No achievements yet. Complete goals to earn them!</p></div>
-                        <?php else: ?>
-                            <div class="achievements-grid">
-                                <?php foreach ($recent_achievements as $a): ?>
-                                    <div class="achievement-item">
-                                        <div class="achievement-icon" style="background:<?php echo htmlspecialchars($a['color'] ?? '#667eea'); ?>;">
-                                            <i class="<?php echo htmlspecialchars($a['icon'] ?? 'fas fa-star'); ?>"></i>
-                                        </div>
-                                        <div class="achievement-title"><?php echo htmlspecialchars($a['title']); ?></div>
-                                        <div class="achievement-points"><?php echo $a['points']; ?> pts</div>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-
-                <!-- RECENT NOTIFICATIONS -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3><i class="fas fa-bell"></i> Recent Notifications</h3>
-                        <a href="notifications.php" style="color:#22d3ee; font-size:13px;">View All</a>
-                    </div>
-                    <div class="card-body">
-                        <?php if (empty($notifications)): ?>
-                            <div class="empty-state"><i class="fas fa-bell-slash"></i><p>No notifications yet</p></div>
-                        <?php else: ?>
-                            <div class="notifications-list">
-                                <?php foreach ($notifications as $n):
-                                    $icon = match($n['type']) {
-                                        'achievement' => 'fas fa-trophy',
-                                        'goal'        => 'fas fa-bullseye',
-                                        'reminder'    => 'fas fa-clock',
-                                        default       => 'fas fa-info-circle'
-                                    };
-                                    $is_unread = !$n['is_read'];
-                                ?>
-                                    <div class="notification-item <?php echo $is_unread ? 'unread' : ''; ?>">
-                                        <div class="notification-icon"><i class="<?php echo $icon; ?>"></i></div>
-                                        <div class="notification-content">
-                                            <div class="notification-title"><?php echo htmlspecialchars($n['title']); ?></div>
-                                            <div class="notification-message"><?php echo htmlspecialchars(mb_strimwidth($n['message'], 0, 80, '...')); ?></div>
-                                            <div class="notification-time"><?php echo date('M j, g:i A', strtotime($n['created_at'])); ?></div>
-                                        </div>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-
-            </div>
-
-            <!-- QUICK ACTIONS -->
-            <div style="margin-top:30px;">
-                <h3 style="margin-bottom:20px; color:var(--text); font-size:18px;">Quick Actions</h3>
-                <div class="quick-actions">
-                    <a href="create_goal.php" class="quick-action"><i class="fas fa-plus-circle"></i> <span>Create Goal</span></a>
-                    <a href="goals.php" class="quick-action"><i class="fas fa-list-check"></i> <span>View Goals</span></a>
-                    <a href="profile.php" class="quick-action"><i class="fas fa-user-edit"></i> <span>Edit Profile</span></a>
-                </div>
-            </div>
-        </main>
+            <?php if ($g['due_date']): ?><div class="goal-due">Due <?= date('M j', strtotime($g['due_date'])) ?></div><?php endif; ?>
+            <div class="pbar"><div class="pfill <?= $s==='completed'?'done':'' ?>" style="width:<?= $pct ?>%"></div></div>
+          </div>
+          <?php endforeach; ?>
+        <?php endif; ?>
+      </div>
     </div>
 
-    <!-- SIDEBAR SCRIPT -->
-    <script>
-    const sidebar = document.getElementById('sidebar');
-const toggle = document.getElementById('sidebarToggle');
-const closeBtn = document.getElementById('sidebarClose');
-const overlay = document.getElementById('sidebarOverlay');
+    <div class="card">
+      <div class="card-head"><h3><i class="fas fa-calendar-alt"></i> Upcoming Deadlines</h3><a href="goals.php">View all</a></div>
+      <div class="card-body">
+        <?php if (empty($upcoming)): ?>
+          <div class="empty"><i class="fas fa-calendar-check"></i>No upcoming deadlines</div>
+        <?php else: ?>
+          <?php foreach ($upcoming as $u):
+            $days = (int)ceil((strtotime($u['due_date']) - time()) / 86400);
+            $urgent = $days <= 2;
+          ?>
+          <div class="due-item">
+            <div class="due-dot" style="background:<?= $urgent?'#FB7185':'#34D399' ?>;"></div>
+            <div class="due-name"><?= htmlspecialchars($u['title']) ?></div>
+            <div class="due-date <?= $urgent?'due-urgent':'' ?>"><?= $days === 0 ? 'Today' : ($days === 1 ? 'Tomorrow' : "in $days days") ?></div>
+          </div>
+          <?php endforeach; ?>
+        <?php endif; ?>
+      </div>
+    </div>
 
-if (toggle) {
-    toggle.addEventListener('click', () => {
-        sidebar.classList.add('active');
-        overlay.classList.add('active');
-    });
+    <div class="card">
+      <div class="card-head"><h3><i class="fas fa-trophy"></i> Recent Badges</h3><a href="achievements.php">View all</a></div>
+      <div class="card-body">
+        <?php if (empty($recent_badges)): ?>
+          <div class="empty"><i class="fas fa-trophy"></i>Complete goals to earn badges!</div>
+        <?php else: ?>
+          <div class="badges-grid">
+            <?php foreach ($recent_badges as $b): ?>
+            <div class="badge-item">
+              <div class="badge-icon" style="background:<?= htmlspecialchars($b['color']) ?>;"><i class="fas fa-<?= htmlspecialchars($b['icon']) ?>"></i></div>
+              <div>
+                <div class="badge-name"><?= htmlspecialchars($b['title']) ?></div>
+                <div class="badge-pts">+<?= $b['points'] ?> pts</div>
+              </div>
+            </div>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3><i class="fas fa-bell"></i> Notifications</h3><a href="notifications.php">View all</a></div>
+      <div class="card-body">
+        <?php if (empty($notifications)): ?>
+          <div class="empty"><i class="fas fa-bell-slash"></i>No notifications yet</div>
+        <?php else: ?>
+          <?php foreach ($notifications as $n):
+            $icon = match($n['type']) {
+              'achievement' => 'trophy',
+              'goal'        => 'bullseye',
+              'reminder'    => 'clock',
+              default       => 'info-circle'
+            };
+          ?>
+          <div class="notif-item">
+            <?php if (!$n['is_read']): ?><div class="unread-dot"></div><?php endif; ?>
+            <div class="notif-icon"><i class="fas fa-<?= $icon ?>"></i></div>
+            <div>
+              <div class="notif-title"><?= htmlspecialchars($n['title']) ?></div>
+              <div class="notif-msg"><?= htmlspecialchars($n['message']) ?></div>
+              <div class="notif-time"><?= date('M j, g:i a', strtotime($n['created_at'])) ?></div>
+            </div>
+          </div>
+          <?php endforeach; ?>
+        <?php endif; ?>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Quick actions -->
+  <div class="section-label">Quick Actions</div>
+  <div class="actions-row">
+    <a href="create_goal.php" class="action-btn"><i class="fas fa-plus-circle"></i> Create Goal</a>
+    <a href="goals.php"       class="action-btn"><i class="fas fa-list-check"></i> My Goals</a>
+    <a href="achievements.php"class="action-btn"><i class="fas fa-trophy"></i> Achievements</a>
+    <a href="profile.php"     class="action-btn"><i class="fas fa-user-edit"></i> Edit Profile</a>
+  </div>
+
+</main></div>
+
+
+<script>
+// Progress bars animate in
+document.querySelectorAll('.pfill').forEach(b => {
+  const w = b.style.width; b.style.width = '0';
+  setTimeout(() => b.style.width = w, 200);
+});
+
+Chart.defaults.font.family = 'Inter';
+
+function isLight(){ return document.documentElement.getAttribute('data-theme')==='light'; }
+function tcol(){ return isLight() ? 'rgba(26,31,60,0.65)'  : 'rgba(234,240,255,0.65)'; }
+function gcol(){ return isLight() ? 'rgba(79,70,229,0.10)' : 'rgba(255,255,255,0.05)'; }
+
+// Donut chart (build once)
+const donutEl = document.getElementById('donutChart');
+if (donutEl) {
+  new Chart(donutEl, {
+    type: 'doughnut',
+    data: {
+      labels: <?= $donut_labels ?>,
+      datasets: [{ data: <?= $donut_data ?>, backgroundColor: ['#34D399','#818CF8','#FBBF24','#FB7185'], borderWidth: 0, hoverOffset: 6 }]
+    },
+    options: {
+      responsive: false, cutout: '72%',
+      animation: { animateScale: true, duration: 900 },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed}` } } }
+    }
+  });
 }
 
-if (closeBtn) {
-    closeBtn.addEventListener('click', () => {
-        sidebar.classList.remove('active');
-        overlay.classList.remove('active');
-    });
+// Bar chart - rebuild on theme change
+const barEl     = document.getElementById('barChart');
+const barLabels = <?= $bar_labels ?>;
+const barData   = <?= $bar_data ?>;
+let   barInst   = null;
+
+function buildBar() {
+  if (barInst) { barInst.destroy(); barInst = null; }
+  if (!barEl) return;
+  barInst = new Chart(barEl, {
+    type: 'bar',
+    data: {
+      labels: barLabels,
+      datasets: [{ label: 'Goals completed', data: barData,
+        backgroundColor: 'rgba(79,70,229,0.55)',
+        hoverBackgroundColor: 'rgba(79,70,229,0.85)',
+        borderRadius: 8, borderSkipped: false }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 500 },
+      scales: {
+        x: { grid: { color: gcol() }, border: { display: false },
+             ticks: { color: tcol(), font: { size: 12, weight: '700' } } },
+        y: { beginAtZero: true, grid: { color: gcol() }, border: { display: false },
+             ticks: { color: tcol(), stepSize: 1, precision: 0, font: { size: 11 } } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
 }
+buildBar();
 
-if (overlay) {
-    overlay.addEventListener('click', () => {
-        sidebar.classList.remove('active');
-        overlay.classList.remove('active');
-    });
-}
-
-        document.addEventListener('click', (e) => {
-            if (window.innerWidth <= 860 && sidebar.classList.contains('active') && !sidebar.contains(e.target) && !toggle.contains(e.target))
-                sidebar.classList.remove('active');
-        });
-        window.addEventListener('resize', () => {
-            if (window.innerWidth > 860) sidebar.classList.remove('active');
-        });
-
-        // chart rendered by PHP data block above
-
-        // progress bars animation
-        document.querySelectorAll('.progress-fill').forEach(bar => {
-            const w = bar.style.width;
-            bar.style.width = '0%';
-            setTimeout(() => bar.style.width = w, 200);
-        });
-    </script>
+// nav_js() calls this hook every time the theme toggles
+window.onThemeChange = function() { buildBar(); };
+</script>
+<?php nav_js(); ?>
 </body>
 </html>

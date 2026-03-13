@@ -91,7 +91,7 @@ AND u.deleted_at IS NULL
             // Check if already earned
             $checkStmt = $pdo->prepare("
                 SELECT id FROM user_achievements 
-                WHERE user_id = ? AND achievement_id = ? AND deleted_at IS NULL
+                WHERE user_id = ? AND achievement_id = ? AND earned_at IS NOT NULL AND deleted_at IS NULL
             ");
             $checkStmt->execute([$student_id, $achievement['id']]);
             if ($checkStmt->fetch()) continue;
@@ -400,6 +400,7 @@ function getStudentAchievements(PDO $pdo, int $student_id): array
         FROM user_achievements ua
         JOIN achievements a ON a.id = ua.achievement_id
         WHERE ua.user_id = ?
+          AND ua.earned_at IS NOT NULL
           AND ua.deleted_at IS NULL
           AND a.deleted_at IS NULL
         ORDER BY ua.earned_at DESC
@@ -420,6 +421,7 @@ function getAchievementProgress(PDO $pdo, int $student_id): array
               SELECT 1 FROM user_achievements ua
               WHERE ua.user_id = ?
                 AND ua.achievement_id = a.id
+                AND ua.earned_at IS NOT NULL
                 AND ua.deleted_at IS NULL
           )
         ORDER BY a.created_at DESC
