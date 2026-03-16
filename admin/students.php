@@ -1378,12 +1378,6 @@ a:focus-visible, button:focus-visible{
                     <?php if ($assigned_count > 0): ?><span class="badge"><?php echo $assigned_count; ?></span><?php endif; ?>
                 </a>
 
-                <!-- ✅ Progress Requests nav link -->
-                <a href="progress_requests.php" class="nav-link <?php echo $current === 'progress_requests.php' ? 'active' : ''; ?>">
-                    <i class="fas fa-check-double"></i> Progress Requests
-                    <?php if ($pending_requests > 0): ?><span class="badge"><?php echo $pending_requests; ?></span><?php endif; ?>
-                </a>
-
                 <a href="achievements.php" class="nav-link <?php echo $current === 'achievements.php' ? 'active' : ''; ?>">
                     <i class="fas fa-trophy"></i> Achievements
                     <?php if ($points_count > 0): ?><span class="badge"><?php echo $points_count; ?> pts</span><?php endif; ?>
@@ -1395,11 +1389,6 @@ a:focus-visible, button:focus-visible{
 
                 <a href="notifications.php" class="nav-link <?php echo $current === 'notifications.php' ? 'active' : ''; ?>">
                     <i class="fas fa-bell"></i> Notifications
-                </a>
-
-                <!-- IMPORTANT: Only ONE active class at a time (you had Categories active also in goals.php) -->
-                <a href="categories.php" class="nav-link <?php echo $current === 'categories.php' ? 'active' : ''; ?>">
-                    <i class="fas fa-tags"></i> Categories
                 </a>
 
                 <a href="settings.php" class="nav-link <?php echo $current === 'settings.php' ? 'active' : ''; ?>">

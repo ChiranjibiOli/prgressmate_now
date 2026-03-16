@@ -848,10 +848,6 @@ a:focus-visible, button:focus-visible{
                     <?php if ($assigned_count > 0): ?><span class="badge"><?php echo $assigned_count; ?></span><?php endif; ?>
                 </a>
 
-                <a href="progress_requests.php" class="nav-link <?php echo $current === 'progress_requests.php' ? 'active' : ''; ?>">
-                    <i class="fas fa-check-double"></i> Progress Requests
-                    <?php if ($pending_requests > 0): ?><span class="badge"><?php echo $pending_requests; ?></span><?php endif; ?>
-                </a>
 
                 <a href="achievements.php" class="nav-link <?php echo $current === 'achievements.php' ? 'active' : ''; ?>">
                     <i class="fas fa-trophy"></i> Achievements
@@ -866,9 +862,6 @@ a:focus-visible, button:focus-visible{
                     <i class="fas fa-bell"></i> Notifications
                 </a>
 
-                <a href="categories.php" class="nav-link <?php echo $current === 'categories.php' ? 'active' : ''; ?>">
-                    <i class="fas fa-tags"></i> Categories
-                </a>
 
                 <a href="settings.php" class="nav-link <?php echo $current === 'settings.php' ? 'active' : ''; ?>">
                     <i class="fas fa-cog"></i> Settings
